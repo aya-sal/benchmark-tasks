@@ -1,0 +1,66 @@
+#usda 1.0
+(
+    defaultPrim = "RootNode"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "RootNode" (
+    prepend references = @./lubricant.usda@
+)
+{
+    over "Geometry"
+    {
+        over "body_01_obj_00"
+        {
+            over "body_01_mesh_00"
+            {
+                bool physics:collisionEnabled = 0
+            }
+        }
+
+        over "cap_01_obj_00"
+        {
+            over "cap_01_mesh_00"
+            {
+                bool physics:collisionEnabled = 0
+            }
+        }
+    }
+
+    def Material "BottlePhysics" (
+        prepend apiSchemas = ["PhysicsMaterialAPI"]
+    )
+    {
+        float physics:dynamicFriction = 0.6
+        float physics:restitution = 0
+        float physics:staticFriction = 0.75
+    }
+
+    def Cylinder "BodyCollider" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+    )
+    {
+        uniform token axis = "Z"
+        double height = 0.20459999999999998
+        rel material:binding:physics = </RootNode/BottlePhysics>
+        double radius = 0.04
+        token visibility = "invisible"
+        double3 xformOp:translate = (0, 0, 0.1027)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+
+    def Cylinder "CapCollider" (
+        prepend apiSchemas = ["PhysicsCollisionAPI", "MaterialBindingAPI"]
+    )
+    {
+        uniform token axis = "Z"
+        double height = 0.0471
+        rel material:binding:physics = </RootNode/BottlePhysics>
+        double radius = 0.0367
+        token visibility = "invisible"
+        double3 xformOp:translate = (0, 0, 0.22305000000000003)
+        uniform token[] xformOpOrder = ["xformOp:translate"]
+    }
+}
+

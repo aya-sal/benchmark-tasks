@@ -1,27 +1,10 @@
-"""First-pass scripted demo for the toolbox-open task, run in the yam_arena embodiment.
-
-    python demo.py task.py demo_out [--max-steps 1200] [--no-record]
-
-UNVERIFIED. Nothing here has run on the real simulator. The clip positions (geometry.CLIP_TAB), the direction that
-releases the latch (RELEASE_DIR), the grasp orientation and the lid-edge grasp are all guesses to tune. The control
-helpers (Arm, together) are copied from lock-before-loading/demo.py.
-
-1. Both arms take their clip's tab and pull it along RELEASE_DIR until the measured latch angle shows it released.
-2. Both arms take the lid's front edge and swing it up along its arc to about 50 degrees.
-3. Both arms let go, drop under the lid and push it over its last degrees onto the hinge stop, then go home.
-"""
+"""Scripted bimanual clip release and lid opening through YAM gripper contact."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import math
-import os
-import sys
-from pathlib import Path
-
-import numpy as np
-
 import sys
 from pathlib import Path
 
@@ -29,8 +12,6 @@ import numpy as np
 
 CONTROL_HZ = 20
 DT = 1.0 / CONTROL_HZ
-DEBUG = bool(os.environ.get("DEMO_DEBUG"))
-PAD_BELOW_TCP = 0.013   # yam_arena.constants.PAD_TIP_PAST_TCP: fingertips below the tool point
 
 
 class Arm:
@@ -94,23 +75,43 @@ def together(*gens):
 
 
 
-# -- the task-specific part -----------------------------------------------------------------------------------------
-RELEASE_DIR = np.array([-0.6, 0.0, 0.8])   # GUESS: up and toward the robot. Flip a component if the latch doesn't turn
-RELEASE_MAX_M = 0.06                        # give up pulling after this far
-LIFT_TO_DEG, PUSH_TO_DEG = 50.0, 95.0
-LIFT_RATE, PUSH_RATE = 12.0, 15.0           # degrees per second
+def rotation_y(degrees):
+    angle = math.radians(degrees)
+    c, s = math.cos(angle), math.sin(angle)
+    return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
 
 
 class Ctx:
     def __init__(self, emb, task):
         self.emb, self.task = emb, task
         self.left, self.right = Arm("left"), Arm("right")
+        self.stage = "approach"
+        self.grasp_tracking = {}
 
-    def lid_deg(self) -> float:
-        return float(self.task._STATE["lid_deg"])
+    def angles(self):
+        from yam_arena.scene import object_states
 
-    def latch_deg(self) -> float:
-        return float(self.task._STATE["latch_deg"])
+        return self.task.angles(object_states(self.emb._env, ("toolbox",)))
+
+    def record_grasp(self):
+        from yam_arena.constants import FINGER_JOINTS, TCP_OFFSET
+        from yam_arena.urdf import quat_xyzw_to_matrix
+
+        env = self.emb._env.unwrapped
+        origin = env.scene.env_origins[0].cpu().numpy()
+        for arm in (self.left, self.right):
+            robot = env.scene[f"{arm.side}_robot"]
+            body = robot.find_bodies("gripper")[0][0]
+            finger_ids = robot.find_joints(FINGER_JOINTS, preserve_order=True)[0]
+            pose = robot.data.body_link_pose_w.torch[0, body].cpu().numpy()
+            joints = robot.data.joint_pos.torch[0, finger_ids].cpu().numpy()
+            actual = pose[:3] - origin + quat_xyzw_to_matrix(pose[3:]) @ TCP_OFFSET
+            self.grasp_tracking[arm.side] = {
+                "commanded_tcp_m": arm.pos.tolist(),
+                "actual_tcp_m": actual.tolist(),
+                "tcp_error_mm": ((actual - arm.pos) * 1000).round(2).tolist(),
+                "finger_opening_m": float(-joints.sum()),
+            }
 
     def action(self):
         from inspect_robots.types import Action
@@ -119,66 +120,100 @@ class Ctx:
         return Action(data=pack(self.left.command(), self.right.command()))
 
 
-def release_clip(arm, ctx, g):
+CLIP_APPROACH_PITCH = -70.0  # tool points forward and 20 degrees below horizontal
+CLIP_STOP = 85.0
+CLIP_PAD_CONTACT = 0.003  # contact point ahead of the TCP, inward from the pad tip
+CLIP_INSERT_OPENING = 0.45
+
+
+def clip_rotation(side, pitch):
     from yam_arena.demo import grip_rotation
 
-    down = grip_rotation(0.0)
-    tab = g.clip_tab(arm.side)
-    yield from arm.move(tab + [0, 0, 0.08], down, 2.5, grip=1.0)
-    yield from arm.move(tab, down, 1.5)
-    yield from arm.set_grip(0.0, 0.8)
-    d, direction = 0.0, RELEASE_DIR / np.linalg.norm(RELEASE_DIR)
-    target = ctx.task.LATCH_RELEASED_DEG + 5.0
-    while ctx.latch_deg() < target and d < RELEASE_MAX_M:   # closed loop on the measured latch angle
-        d += 0.02 * DT                                    # 2 cm/s
-        arm.aim(tab + direction * d, down)
-        yield
-    yield from wait(0.5)
-    yield from arm.set_grip(1.0, 0.6)
+    yaw = -math.pi / 2 if side == "left" else math.pi / 2
+    return rotation_y(pitch) @ grip_rotation(yaw)
 
 
-def lift_lid(arm, ctx, g):
-    from yam_arena.demo import grip_rotation
-
-    pinch = grip_rotation(math.pi / 2)         # GUESS: fingers closing along x, across the lid's front lip
-    edge = g.lid_point(g.LID_GRIP_R, 0.0, arm.side)
-    yield from arm.move(edge + [0, 0, 0.08], pinch, 2.0, grip=1.0)
-    yield from arm.move(edge + [0, 0, 0.004], pinch, 1.5)
-    yield from arm.set_grip(0.0, 0.8)
-    theta = 0.0
-    while theta < LIFT_TO_DEG:                  # open loop along the lid's arc
-        theta += LIFT_RATE * DT
-        arm.aim(g.lid_point(g.LID_GRIP_R, theta, arm.side) + [0, 0, 0.004], pinch)
-        yield
-    yield from arm.set_grip(1.0, 0.6)
+def clip_grasp_pose(side, contact, pitch):
+    rot = clip_rotation(side, pitch)
+    return contact - CLIP_PAD_CONTACT * rot[:, 2], rot
 
 
-def push_over(arm, ctx, g):
-    from yam_arena.demo import grip_rotation
+def grasp_clip(arm, g):
+    pos, rot = clip_grasp_pose(arm.side, g.clip_tab(arm.side, 0), CLIP_APPROACH_PITCH)
+    pregrasp = pos - 0.055 * rot[:, 2]
+    yield from arm.move(pregrasp + [0, 0, 0.075], rot, 2.5)
+    yield from arm.move(pregrasp, rot, 1.0, grip=CLIP_INSERT_OPENING)
+    yield from arm.move(pos, rot, 1.5)
+    yield from arm.set_grip(0.08)
 
-    down = grip_rotation(0.0)
-    theta = LIFT_TO_DEG
-    n = g.ROT @ np.array([-math.sin(math.radians(theta)), 0.0, math.cos(math.radians(theta))])
-    start = g.lid_point(g.LID_PUSH_R, theta, arm.side) - 0.03 * n     # under the lid's inner face
-    yield from arm.move(start + [-0.05, 0.0, 0.03], down, 2.0, grip=0.0)
-    yield from arm.move(start, down, 1.0)
-    while theta < PUSH_TO_DEG and ctx.lid_deg() < ctx.task.LID_FULL_DEG + 3.0:
-        theta += PUSH_RATE * DT
-        n = g.ROT @ np.array([-math.sin(math.radians(theta)), 0.0, math.cos(math.radians(theta))])
-        arm.aim(g.lid_point(g.LID_PUSH_R, theta, arm.side) - 0.03 * n, down)
+
+def swing_clip(arm, g):
+    for angle in np.linspace(0, CLIP_STOP, 100):
+        # Rotate with the clip so the jaws stay across its edge during the pull.
+        arm.aim(*clip_grasp_pose(arm.side, g.clip_tab(arm.side, angle), CLIP_APPROACH_PITCH + angle))
         yield
 
 
-def go_home(arm):
-    yield from arm.move(arm.home[0], arm.home[1], 2.5, grip=1.0)
+def raise_lid(arm, g):
+    tab = g.clip_tab(arm.side, CLIP_STOP)
+    radius = (np.asarray(g.ORIGIN)[0] - tab[0]) - g.HINGE[0]
+    height = tab[2] - g.ORIGIN[2] - g.HINGE[2]
+    y = g.ORIGIN[1] - tab[1]
+    for angle in np.linspace(0, 32, 80):
+        contact = g.place(g.HINGE + g.rotate_open((radius, y, height), angle))
+        pitch = CLIP_APPROACH_PITCH + CLIP_STOP - 2 * angle
+        arm.aim(*clip_grasp_pose(arm.side, contact, pitch))
+        yield
+
+
+def push_lid(arm, holder, g, start):
+    from yam_arena.demo import grip_rotation
+
+    # Start in front of the rim, then enter the gap under the raised lid.
+    yield from arm.set_grip(1.0, 0.4)
+    yield from arm.move(arm.pos + [-0.045, 0, 0], seconds=0.6)
+    yield from arm.set_grip(0.0, 0.4)
+    radius = 0.247
+
+    def pose(angle, clearance):
+        # Horizontal approach stays within the wrist limits along the full arc.
+        point = g.lid_point(radius, angle, arm.side, height=-clearance) - [0.013, 0, 0]
+        rot = rotation_y(-90) @ grip_rotation()
+        return point, rot
+
+    p, r = pose(start, 0.048)
+    yield from arm.move(p + [-0.07, 0, 0], r, 1.0)
+    yield from arm.move(p, r, 1.0)
+    contact, _ = pose(start, 0.003)
+    yield from arm.move(contact, r, 0.7)
+    yield from holder.set_grip(1.0, 0.4)
+    yield from holder.move(holder.pos + [-0.045, 0, 0], seconds=0.7)
+    for angle in np.linspace(start, 92, 115):
+        arm.aim(*pose(angle, 0.003))
+        yield
+    yield from arm.move(arm.pos + [-0.06, 0, 0], seconds=1.0)
 
 
 def script(ctx, g):
-    yield from together(release_clip(ctx.left, ctx, g), release_clip(ctx.right, ctx, g))
-    yield from together(lift_lid(ctx.left, ctx, g), lift_lid(ctx.right, ctx, g))
-    yield from together(push_over(ctx.left, ctx, g), push_over(ctx.right, ctx, g))
-    yield from wait(1.5)
-    yield from together(go_home(ctx.left), go_home(ctx.right))
+    arms = (ctx.left, ctx.right)
+    yield from together(*(grasp_clip(arm, g) for arm in arms))
+    ctx.record_grasp()
+    ctx.stage = "release clips"
+    yield from together(*(swing_clip(arm, g) for arm in arms))
+    lid, left, right = ctx.angles()
+    if min(left, right) < 80:
+        ctx.stage = "clip grasp did not reach the open stops"
+        return
+    ctx.stage = "lift from the clips"
+    yield from together(*(raise_lid(arm, g) for arm in arms))
+    lid, _, _ = ctx.angles()
+    if lid < 24:
+        ctx.stage = "lid did not lift far enough to push"
+        return
+    ctx.stage = "push lid"
+    yield from push_lid(ctx.right, ctx.left, g, lid)
+    ctx.stage = "settle"
+    yield from wait(2)
 
 
 def _write_mp4(frames, path: Path) -> None:
@@ -200,7 +235,6 @@ def run(task_path: str, out_dir: str, max_steps: int = 1200, record: bool = True
     emb = yam_arena_embodiment(task=task_path, object_jitter=0, control_hz=CONTROL_HZ, cam_width=cam_width,
                                cam_height=cam_height)
     task = emb.task.module
-    sys.modules.setdefault("task", task)
     import geometry as g
 
     obs = emb.reset(Scene(id="demo", instruction=task.INSTRUCTION))
@@ -225,18 +259,18 @@ def run(task_path: str, out_dir: str, max_steps: int = 1200, record: bool = True
         info = res.info
         snap(res.observation)
         if steps % 40 == 0:
-            S = task._STATE
-            print(f"step {steps} score {info.get('score')} lid {S['lid_deg']:.1f} latch {S['latch_deg']:.1f} "
-                  f"moved {S['moved']}", flush=True)
+            lid, left, right = ctx.angles()
+            print(f"{steps=} {ctx.stage}: lid {lid:.1f}°, clips {left:.1f}°/{right:.1f}°", flush=True)
         if res.terminated:
             success = res.termination_reason == "success"
             break
         if ended is not None and steps - ended >= hold_s * CONTROL_HZ:
             break
-    S = task._STATE
+    lid, left, right = ctx.angles()
     score = 1.0 if success else float(info.get("score", 0.0) or 0.0)
-    result = {"task_score": score, "success": success, "steps": steps, "lid_deg": round(S["lid_deg"], 1),
-              "latch_deg": round(S["latch_deg"], 1), "problems": list(S["why"]),
+    result = {"task_score": score, "success": success, "steps": steps, "stage": ctx.stage,
+              "grasp_tracking": ctx.grasp_tracking,
+              "lid_deg": round(lid, 1), "clip_deg": {"left": round(left, 1), "right": round(right, 1)},
               "worst_ik_mm": {"left": round(ctx.left.worst_mm, 2), "right": round(ctx.right.worst_mm, 2)}}
     if record:
         import imageio

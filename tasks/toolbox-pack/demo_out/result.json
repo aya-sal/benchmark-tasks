@@ -1,4 +1,28 @@
 {
-  "score": 0.0,
-  "steps": 2060
+  "score": 0.1111111111111111,
+  "success": false,
+  "steps": 903,
+  "failure": {
+    "item": "spray",
+    "reason": "item did not settle in its assigned placement"
+  },
+  "worst_ik_mm": {
+    "left": 0.08,
+    "right": 0.0
+  },
+  "packed": {
+    "sealant": true,
+    "lubricant": false,
+    "spray": false,
+    "hammer": false,
+    "pliers": false,
+    "wrench": false,
+    "screwdriver": false,
+    "tape": false,
+    "glasses": false
+  },
+  "temple_deg": {
+    "joint_templeRight_01_joint_00": -0.0,
+    "joint_templeLeft_01_joint_00": -0.0
+  }
 }

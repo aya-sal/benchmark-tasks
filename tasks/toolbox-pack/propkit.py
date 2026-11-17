@@ -7,6 +7,7 @@ import importlib.util
 import math
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from yam_arena import task_file
@@ -20,10 +21,26 @@ class Prop(Box):
     """``pos``/``size`` are the world bbox centre and the scaled bbox size (in the prop's own frame, turned by yaw)."""
 
     usd: str = ""
-    scale: float = 1.0
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
     fixed: bool = False
     bmin: tuple = (0.0, 0.0, 0.0)   # asset bbox in the asset frame at scale 1
     bmax: tuple = (0.0, 0.0, 0.0)
+
+    joints: tuple[str, ...] = ()
+
+    def _check(self):
+        super()._check()
+        if not Path(self.usd).is_file():
+            raise FileNotFoundError(self.usd)
+
+    @property
+    def spawn_origin(self) -> tuple[float, float, float]:
+        """Undo the scaled, yawed offset from the asset origin to its bounding-box centre."""
+        cx, cy, cz = (np.asarray(self.bmin) + self.bmax) * np.asarray(self.scale) / 2
+        ct, st = math.cos(self.yaw), math.sin(self.yaw)
+        return (float(self.pos[0] - ct * cx + st * cy),
+                float(self.pos[1] - st * cx - ct * cy),
+                float(self.pos[2] - cz))
 
     @property
     def free(self) -> bool:
@@ -33,6 +50,7 @@ class Prop(Box):
 def prop(name, usd, bounds, xy, *, table_top, yaw=0.0, scale=1.0, mass=None, fixed=False, **kw) -> Prop:
     """``xy`` is where the asset's ORIGIN goes. ``bounds`` is (min, max) of the asset bbox from inspect_asset."""
     bmin, bmax = np.array(bounds[0], float), np.array(bounds[1], float)
+    scale = tuple(map(float, np.broadcast_to(scale, (3,))))
     c = (bmin + bmax) / 2 * scale
     size = tuple(float(v) for v in (bmax - bmin) * scale)
     ct, st = math.cos(yaw), math.sin(yaw)
@@ -59,42 +77,60 @@ _SPECS: dict[str, Prop] = {}
 
 def _arena_object(spec: Prop):
     import isaaclab.sim as sim_utils
-    from isaaclab.assets import RigidObjectCfg
+    from isaaclab.actuators import ImplicitActuatorCfg
+    from isaaclab.managers import EventTermCfg, SceneEntityCfg
+    from isaaclab_physx.sim.schemas import PhysxArticulationCfg
+    from isaaclab_arena.terms.events import reset_articulation_pose_and_joints
     from isaaclab_arena.assets.object import Object
     from isaaclab_arena.assets.object_type import ObjectType
     from isaaclab_arena.utils.pose import Pose
 
-    s = spec.scale
-    spawner = sim_utils.UsdFileCfg(
-        usd_path=spec.usd,
-        scale=(s, s, s),
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            kinematic_enabled=spec.fixed, max_depenetration_velocity=1.0,
-            solver_position_iteration_count=16, solver_velocity_iteration_count=2),
-        mass_props=None if (spec.fixed or spec.mass is None) else sim_utils.MassPropertiesCfg(mass=float(spec.mass)),
-    )
-
     class PropObject(Object):
-        def _generate_rigid_cfg(self):
-            cfg = RigidObjectCfg(prim_path=self.prim_path, spawn=self.spawner_cfg)
-            return self._add_initial_pose_to_cfg(cfg)
+        def _generate_articulation_cfg(self):
+            cfg = super()._generate_articulation_cfg()
+            cfg.init_state.joint_pos = dict.fromkeys(spec.joints, 0.0)
+            cfg.init_state.joint_vel = dict.fromkeys(spec.joints, 0.0)
+            cfg.actuators = {"temples": ImplicitActuatorCfg(
+                joint_names_expr=list(spec.joints), stiffness=0.0, damping=0.001,
+                friction=0.0015, dynamic_friction=0.0015)}
+            return cfg
 
-    bmin, bmax = np.array(spec.bmin), np.array(spec.bmax)
-    c = (bmin + bmax) / 2 * s
-    ct, st = math.cos(spec.yaw), math.sin(spec.yaw)
-    origin = (spec.pos[0] - (ct * c[0] - st * c[1]),
-              spec.pos[1] - (st * c[0] + ct * c[1]),
-              spec.pos[2] - spec.size[2] / 2 - bmin[2] * s)   # asset origin, so the underside sits on the table
+        def _build_reset_event(self):
+            if not spec.joints:
+                return super()._build_reset_event()
+            return EventTermCfg(func=reset_articulation_pose_and_joints, mode="reset",
+                                params={"asset_cfg": SceneEntityCfg(self.name), "pose": self.initial_pose})
+
+    s = spec.scale
+    addons = {"collision_props": sim_utils.CollisionPropertiesCfg(contact_offset=0.001, rest_offset=0.0)}
+    if spec.joints:
+        addons["articulation_props"] = {
+            "/Geometry/frame_01_obj_00": [PhysxArticulationCfg(
+                enabled_self_collisions=False, solver_position_iteration_count=16,
+                solver_velocity_iteration_count=4)]}
+    else:
+        addons["rigid_props"] = sim_utils.RigidBodyPropertiesCfg(
+            kinematic_enabled=spec.fixed, max_depenetration_velocity=1.0,
+            solver_position_iteration_count=16, solver_velocity_iteration_count=4)
+        if spec.mass is not None and not spec.fixed:
+            addons["mass_props"] = sim_utils.MassPropertiesCfg(mass=spec.mass)
+
     return PropObject(
         name=spec.name,
-        object_type=ObjectType.RIGID,
-        spawner_cfg=spawner,
-        initial_pose=Pose(position_xyz=tuple(float(v) for v in origin),
+        object_type=ObjectType.ARTICULATION if spec.joints else ObjectType.RIGID,
+        usd_path=spec.usd, scale=s, spawn_cfg_addon=addons,
+        initial_pose=Pose(position_xyz=spec.spawn_origin,
                           rotation_xyzw=(0.0, 0.0, math.sin(spec.yaw / 2), math.cos(spec.yaw / 2))),
     )
 
 
-def _prop_state(env, spec: Prop) -> ObjectState:
+@dataclass(frozen=True)
+class PropState(ObjectState):
+    origin: np.ndarray
+    joints: dict[str, float]
+
+
+def _prop_state(env, spec: Prop) -> PropState:
     """Live state from the sim: pos = bbox centre, low/high = world AABB."""
     base = env.unwrapped
     art = base.scene[spec.name]
@@ -105,14 +141,17 @@ def _prop_state(env, spec: Prop) -> ObjectState:
 
     to_np = lambda a: a.detach().cpu().numpy().astype(np.float64)  # noqa: E731
     d = art.data
-    p = to_np(t(d.root_pos_w)[0] - origin)
-    q = to_np(t(d.root_quat_w)[0])
+    pose = t(d.root_link_pose_w)[0]
+    p = to_np(pose[:3] - origin)
+    q = to_np(pose[3:])
     R = rot_matrix(q)
     bmin, bmax = np.array(spec.bmin), np.array(spec.bmax)
     centre = R @ ((bmin + bmax) / 2 * spec.scale) + p
     half = np.abs(R) @ ((bmax - bmin) / 2 * spec.scale)
-    return ObjectState(pos=centre, quat_xyzw=q, lin_vel=to_np(t(d.root_lin_vel_w)[0]),
-                       ang_vel=to_np(t(d.root_ang_vel_w)[0]), low=centre - half, high=centre + half)
+    joints = dict(zip(art.joint_names, to_np(t(d.joint_pos)[0]), strict=True)) if spec.joints else {}
+    velocity = to_np(t(d.root_vel_w)[0])
+    return PropState(pos=centre, quat_xyzw=q, lin_vel=velocity[:3], ang_vel=velocity[3:],
+                     low=centre - half, high=centre + half, origin=p, joints=joints)
 
 
 def _patch_scene(scene) -> None:
@@ -158,6 +197,24 @@ class _Finder(importlib.abc.MetaPathFinder):
 
         spec.loader.exec_module = exec_module
         return spec
+
+
+def install_trial_reset():
+    from yam_arena.inspect_embodiment import YamArenaEmbodiment
+
+    base_reset = YamArenaEmbodiment.reset
+    if getattr(base_reset, "_toolbox_pack_reset", False):
+        return
+
+    def reset(self, *args, **kwargs):
+        task = getattr(self, "task", None)
+        callback = getattr(getattr(task, "module", None), "reset_trial", None)
+        if callback is not None:
+            callback()
+        return base_reset(self, *args, **kwargs)
+
+    reset._toolbox_pack_reset = True
+    YamArenaEmbodiment.reset = reset
 
 
 def install() -> None:

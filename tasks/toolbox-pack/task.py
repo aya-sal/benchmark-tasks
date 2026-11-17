@@ -1,306 +1,171 @@
-"""Hazard-aware kit packing: put supplies and tools into the two compartments of the box, obeying handling rules.
+"""Sort the supplies and tools into the open toolbox, then fold and pack the glasses."""
 
-Run:  python demo.py task.py demo_out --max-steps 300
-"""
-
-from __future__ import annotations
-
+import itertools
 import math
-import pathlib
-import sys, os
+from pathlib import Path
+import sys
 
 import numpy as np
 
-HERE = pathlib.Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import propkit  # noqa: E402,F401  (hooks yam_arena so Prop objects are simulated)
-from propkit import prop, rot_matrix  # noqa: E402
-from yam_arena.task_file import TABLE_TOP  # noqa: E402
+from propkit import install_trial_reset, prop, rot_matrix
+from yam_arena.task_file import TABLE_TOP
 
 SCENE = "station"
 TOP = TABLE_TOP[SCENE]
 SCORE_OVER = "end"
+SUCCESS_HOLD_S = 1.0
+INSTRUCTION = ("Put the grease bottle and spray can upright on the left half of the open toolbox with the "
+               "sealant tube. Put the hand tools and duct tape on the right half. Fold both temples of "
+               "the safety glasses, then put them anywhere inside the toolbox last.")
 
+SIZE_INCREASE = 1.05
+BOX_SCALE = tuple(axis * SIZE_INCREASE for axis in (1.42, 1.15, .43))
+BOX_XY = (.380, 0.0)
+BOX_YAW = math.pi
+BOX_BOUNDS = ((-.26802, -.26531, .00005), (.14695, .26531, .47299))
+BOX = prop("box", HERE / "assets/prepped/toolbox_pack_open.usda", BOX_BOUNDS, BOX_XY,
+           table_top=TOP + BOX_BOUNDS[0][2] * BOX_SCALE[2], yaw=BOX_YAW,
+           scale=BOX_SCALE, fixed=True)
+BOX_Z = TOP + .001
+BOX_FLOOR = BOX_Z + BOX_SCALE[2] * .01565
+BOX_RIM = BOX_Z + BOX_SCALE[2] * .1742
+# Toolbox asset frame. The base is a continuous cavity and y=0 is the scoring boundary.
+INTERIOR = ((-.112, -.229), (.112, .229))
+LIMITS = {"tools": ((-.112, 0), (.112, .229)),
+          "supplies": ((-.112, -.229), (.112, 0)),
+          "anywhere": INTERIOR}
+TEMPLE_LEFT = "joint_templeLeft_01_joint_00"
+TEMPLE_RIGHT = "joint_templeRight_01_joint_00"
+TEMPLE_JOINTS = (TEMPLE_LEFT, TEMPLE_RIGHT)
+HINGES = {TEMPLE_LEFT: (0.019738588, 0.081444114, 0.054177),
+          TEMPLE_RIGHT: (0.019744325, -0.08144133, 0.05417777)}
+FOLD_MIN = math.radians(75)
 
-def _find(name: str) -> str:
-    hits = sorted((HERE / "assets").rglob(name))
-    if not hits:
-        raise FileNotFoundError(f"{name} not found under {HERE / 'assets'} (did you run prep_assets.py?)")
-    return str(hits[0])
-
-
-# -- the box ---------------------------------------------------------------------------------------------------------
-BOX_SCALE, BOX_YAW = 0.85, math.radians(20)
-BOX = prop("box", _find("D00443.usd"), ((-0.2715, -0.1949, 0.003), (0.2703, 0.1953, 0.2242)), (0.40, 0.22),
-           table_top=TOP, yaw=BOX_YAW, scale=BOX_SCALE, fixed=True)
-BOX_FLOOR_Z, BOX_RIM_Z = BOX.pos[2] - BOX.size[2] / 2, BOX.pos[2] + BOX.size[2] / 2
-
-HALF = (0.2709, 0.1951)
-DIV_AXIS, DIV_AT = 0, 0.0
-DIV_WALL, WALL = 0.025, 0.02
-SUPPLIES_SIGN = +1          # +1: supplies go on the +axis side of the divider. Flip after looking at setup.png
-SUPPLIES_SIDE, TOOLS_SIDE = "left", "right"   # words for the instruction: set them from what setup.png shows
-
-# -- the items: name -> (file, asset bbox, origin xy, yaw deg, scale, mass kg) ---------------------------------------
+# USD, local visual bounds, station origin XY, yaw in degrees, uniform scale, mass in kg.
 ITEMS = {
-    "lubricant": ("lubricant.usda", ((-0.0413, -0.0413, 0.0004), (0.0413, 0.0413, 0.2466)), (0.420, -0.10), 0, 0.6, 0.30),
-    "spray": ("spray.usda", ((-0.031, -0.031, 0.0), (0.031, 0.031, 0.1864)), (0.500, -0.10), 0, 0.8, 0.25),
-    "sealant": ("sealant.usda", ((-0.0794, -0.0179, 0.0001), (0.0351, 0.0182, 0.0233)), (0.422, -0.22), 0, 1.0, 0.08),
-    "tape": ("tape.usda", ((-0.0681, -0.0681, 0.0002), (0.0697, 0.0681, 0.0459)), (0.540, -0.22), 0, 0.6, 0.04),
-    "glasses": ("glasses.usda", ((-0.0825, -0.0845, 0.0001), (0.0845, 0.0845, 0.0596)), (0.460, -0.36), 0, 0.6, 0.03),
-    "hammer": ("hammer.usda", ((-0.0651, -0.1651, 0.0), (0.0651, 0.1651, 0.0292)), (0.230, -0.40), 90, 0.6, 0.25),
-    "pliers": ("pliers.usda", ((-0.1108, -0.0345, 0.0), (0.0811, 0.0342, 0.0259)), (0.242, -0.29), 0, 0.8, 0.12),
-    "wrench": ("wrench.usda", ((-0.0922, -0.0302, 0.0003), (0.1174, 0.0334, 0.0142)), (0.219, -0.19), 0, 0.9, 0.12),
-    "screwdriver": ("screwdriver.usda", ((-0.1029, -0.0166, -0.0035), (0.1027, 0.0166, 0.0319)), (0.230, -0.09), 0, 0.8, 0.08),
+    "lubricant": ("prepped/lubricant_flat.usda", ((-.0413,-.0413,.0004),(.0413,.0413,.2466)), (.275,.425), 0, .62, .30),
+    "spray": ("prepped/spray_flat.usda", ((-.031,-.031,0),(.031,.031,.1864)), (.355,.465), 0, .78, .28),
+    "sealant": ("prepped/sealant.usda", ((-.0794,-.0179,.0001),(.0351,.0182,.0233)), (.365,.355), 90, .65, .07),
+    "hammer": ("hammer/simready_usd/hammer.usda", ((-.0651,-.1651,0),(.0651,.1651,.0292)), (.23,-.42), 90, .55, .24),
+    "pliers": ("prepped/pliers.usda", ((-.1108,-.0345,0),(.0811,.0342,.0259)), (.20,-.34), 0, .65, .10),
+    "wrench": ("prepped/wrench.usda", ((-.0922,-.0302,.0003),(.1174,.0334,.0142)), (.40,-.37), 0, .55, .11),
+    "screwdriver": ("screwdriver/simready_usd/screwdriver.usda", ((-.1029,-.0166,-.0035),(.1027,.0166,.0319)),
+                    (.406,-.46), 0, .55, .07),
+    "tape": ("prepped/tape.usda", ((-.0681,-.0681,.0002),(.0697,.0697,.0459)), (.098,-.24), 0, .55, .07),
+    "glasses": ("prepped/glasses_articulated.usda", ((-.0825,-.0845,.0001),(.0845,.0845,.0596)),
+                (.064,0), 0, .85, None),
 }
-SUPPLIES = ("lubricant", "sealant", "spray", "glasses", "tape")
-TOOLS = ("hammer", "pliers", "wrench", "screwdriver")
-PACK = SUPPLIES + TOOLS
-
-SPEC = {n: prop(n, _find(f), b, xy, table_top=TOP, yaw=math.radians(yaw), scale=s, mass=m)
-        for n, (f, b, xy, yaw, s, m) in ITEMS.items()}
+SPEC = {name: prop(name, HERE / "assets" / path, bounds, xy, table_top=TOP,
+                   yaw=math.radians(yaw), scale=scale * SIZE_INCREASE, mass=mass,
+                   joints=TEMPLE_JOINTS if name == "glasses" else ())
+        for name, (path, bounds, xy, yaw, scale, mass) in ITEMS.items()}
 OBJECTS = [BOX, *SPEC.values()]
+SUPPLIES = ("sealant", "lubricant", "spray")
+TOOLS = ("hammer", "pliers", "wrench", "screwdriver", "tape")
+ORDER = (*SUPPLIES, *TOOLS, "glasses")
 
-
-def _check_layout(margin: float = 0.01) -> None:
-    """Fail at import (not inside the simulator) if two items start overlapping."""
-    rects = {}
-    for n, o in SPEC.items():
-        c, s = abs(math.cos(o.yaw)), abs(math.sin(o.yaw))
-        hx, hy = (c * o.size[0] + s * o.size[1]) / 2, (s * o.size[0] + c * o.size[1]) / 2
-        rects[n] = (o.pos[0] - hx, o.pos[0] + hx, o.pos[1] - hy, o.pos[1] + hy)
-    names = list(rects)
-    for i, a in enumerate(names):
-        for b in names[i + 1:]:
-            ra, rb = rects[a], rects[b]
-            if ra[0] < rb[1] + margin and rb[0] < ra[1] + margin and ra[2] < rb[3] + margin and rb[2] < ra[3] + margin:
-                raise ValueError(f"layout: {a} and {b} overlap or are closer than {margin * 100:.0f} cm")
-
-
-_check_layout()
-
-INSTRUCTION = (
-    f"Pack the kit into the box. Put the supplies (grease bottle, window sealant, spray can, safety glasses, duct tape) "
-    f"in the {SUPPLIES_SIDE} compartment and the hand tools (hammer, pliers, wrench, screwdriver) in the "
-    f"{TOOLS_SIDE} compartment. Keep the grease bottle and the spray can upright, do not drop the safety glasses, "
-    f"do not put anything on top of the safety glasses, and do not rest tools on the bottle or the can."
-)
-
-# -- rules -------------------------------------------------------------------------------------------------------------
-UPRIGHT = {"lubricant": 25.0, "spray": 25.0}   # max tilt (degrees) from vertical
-NO_ABOVE = {                                    # lower item -> items that must never rest on it
-    "glasses": tuple(n for n in PACK if n != "glasses"),
-    "spray": TOOLS,
-    "lubricant": TOOLS,
+# Station XY for the item bounding-box centre, and target item yaw in degrees.
+SLOTS = {
+    "lubricant": (.334, .105, 0), "spray": (.344, .229, 0), "sealant": (.260, .148, 0),
+    "hammer": (.396, -.105, 90), "pliers": (.267, -.088, 90), "wrench": (.354, -.038, 0),
+    "screwdriver": (.229, -.144, 90), "tape": (.439, -.210, 0), "glasses": (.302, .025, 90),
 }
-DROP_SPEED = 1.0          # m/s: the glasses moving faster than this at any time counts as dropped / thrown
-FALL_Z = TOP - 0.05       # an item centre below this left the table
-SETTLED_SPEED = 0.03      # m/s: success needs everything this still
+
+FRAME_BOUNDS = ((.0167,-.0845,.0145),(.0845,.0845,.0596))
+TEMPLE_BOUNDS = {
+    TEMPLE_LEFT: ((-.0825,.0738,.0001),(.0210,.0845,.0583)),
+    TEMPLE_RIGHT: ((-.0825,-.0845,.0001),(.0210,-.0738,.0583)),
+}
 
 
-def compartment(p) -> str | None:
-    """'supplies' / 'tools' if world point ``p`` is inside the box on that side of the divider, else None."""
-    d = np.asarray(p[:2], float) - np.asarray(BOX.pos[:2], float)
-    c, s = math.cos(-BOX_YAW), math.sin(-BOX_YAW)
-    local = ((c * d[0] - s * d[1]) / BOX_SCALE, (s * d[0] + c * d[1]) / BOX_SCALE)
-    if abs(local[0]) > HALF[0] - WALL or abs(local[1]) > HALF[1] - WALL:
-        return None
-    if not (BOX_FLOOR_Z < p[2] < BOX_RIM_Z + 0.08):
-        return None
-    off = local[DIV_AXIS] - DIV_AT
-    if abs(off) < DIV_WALL:
-        return None
-    return "supplies" if (off > 0) == (SUPPLIES_SIGN > 0) else "tools"
+def rz(angle):
+    c, s = math.cos(angle), math.sin(angle)
+    return np.array([[c,-s,0],[s,c,0],[0,0,1]])
 
 
-def tilt_deg(st) -> float:
-    return math.degrees(math.acos(float(np.clip(rot_matrix(st.quat_xyzw)[2, 2], -1.0, 1.0))))
+def corners(bounds):
+    return np.array(list(itertools.product(*zip(*bounds))))
 
 
-# -- monitor: latched events that a final-pose check would miss ----------------------------------------------------------
-_MON: dict = {"dropped": False, "fell": set(), "err": None}
+def local_points(name, joints):
+    spec = SPEC[name]
+    if name != "glasses":
+        return corners((spec.bmin, spec.bmax)) * spec.scale
+    parts = [corners(FRAME_BOUNDS)]
+    for joint, bounds in TEMPLE_BOUNDS.items():
+        pivot = np.asarray(HINGES[joint])
+        parts.append((corners(bounds) - pivot) @ rz(joints[joint]).T + pivot)
+    return np.concatenate(parts) * spec.scale
 
 
-def _reset_monitor() -> None:
-    _MON.update(dropped=False, fell=set())
+def world_points(name, state):
+    return local_points(name, state.joints) @ rot_matrix(state.quat_xyzw).T + state.origin
 
 
-def _watch(emb) -> None:
-    from yam_arena.scene import object_states
-
-    try:
-        st = object_states(emb._env, emb.task.names)
-    except Exception as e:  # pragma: no cover
-        if _MON["err"] is None:
-            _MON["err"] = repr(e)
-            print(f"[pack] monitor error: {e!r}", flush=True)
-        return
-    if float(np.linalg.norm(st["glasses"].lin_vel)) > DROP_SPEED and not _MON["dropped"]:
-        _MON["dropped"] = True
-        print("[pack] safety glasses moved too fast (dropped?)", flush=True)
-    for n in PACK:
-        if st[n].pos[2] < FALL_Z and n not in _MON["fell"]:
-            _MON["fell"].add(n)
-            print(f"[pack] {n} fell off the table", flush=True)
+def folded(state):
+    return state.joints[TEMPLE_LEFT] >= FOLD_MIN and state.joints[TEMPLE_RIGHT] <= -FOLD_MIN
 
 
-def _install_hooks() -> None:
-    try:
-        from yam_arena import inspect_embodiment as ie
-    except Exception:  # pragma: no cover
-        return
-    cls = ie.YamArenaEmbodiment
-    if getattr(cls.step, "_pack_hooked", False):
-        return
-    base_reset, base_step = cls.reset, cls.step
-
-    def reset(self, *a, **k):
-        out = base_reset(self, *a, **k)
-        _reset_monitor()
-        return out
-
-    def step(self, *a, **k):
-        out = base_step(self, *a, **k)
-        _watch(self)
-        return out
-
-    reset._pack_hooked = step._pack_hooked = True
-    cls.reset, cls.step = reset, step
+def inside(name, state, side):
+    points = world_points(name, state)
+    box_points = (points - (*BOX_XY, BOX_Z)) @ rz(BOX_YAW) / np.asarray(BOX_SCALE)
+    low, high = map(np.asarray, LIMITS[side])
+    bottom = points[:, 2].min()
+    return (bool(np.all(box_points[:, :2] >= low - .002) and np.all(box_points[:, :2] <= high + .002))
+            and BOX_FLOOR - .005 <= bottom <= BOX_FLOOR + .030)
 
 
-_install_hooks()
-
-
-# -- scoring -----------------------------------------------------------------------------------------------------------
-def violations(objects) -> list[str]:
-    v = []
-    if _MON["dropped"]:
-        v.append("safety glasses dropped / handled too fast")
-    v += [f"{n} fell off the table" for n in sorted(_MON["fell"])]
-    for lower, uppers in NO_ABOVE.items():
-        f = objects[lower]
-        for u in uppers:
-            o = objects[u]
-            if (o.low[:2] < f.high[:2]).all() and (o.high[:2] > f.low[:2]).all() and o.low[2] > f.high[2] - 0.005:
-                v.append(f"{u} on top of {lower}")
-    return v
-
-
-def _item_ok(name: str, st) -> bool:
-    want = "supplies" if name in SUPPLIES else "tools"
-    if compartment(st.pos) != want:
+def item_ok(name, state):
+    side = "anywhere" if name == "glasses" else "supplies" if name in SUPPLIES else "tools"
+    if not inside(name, state, side):
         return False
-    return name not in UPRIGHT or tilt_deg(st) <= UPRIGHT[name]
+    if name in ("lubricant", "spray"):
+        return rot_matrix(state.quat_xyzw)[2,2] >= math.cos(math.radians(15))
+    return name != "glasses" or folded(state)
 
 
-def score(objects) -> float:
-    """Fraction of items in the right compartment (and upright where required), minus 0.2 per rule violation."""
-    frac = sum(_item_ok(n, objects[n]) for n in PACK) / len(PACK)
-    return round(max(0.0, frac - 0.2 * len(violations(objects))), 3)
+def settled(state):
+    return np.linalg.norm(state.lin_vel) < .035 and np.linalg.norm(state.ang_vel) < .4
 
 
-def success(objects) -> bool:
-    still = all(float(np.linalg.norm(objects[n].lin_vel)) < SETTLED_SPEED for n in PACK)
-    return bool(all(_item_ok(n, objects[n]) for n in PACK) and not violations(objects) and still)
+class PackingTrial:
+    def __init__(self):
+        self.glasses_invalid = False
+        self.glasses_entered = False
+
+    def evaluate(self, states):
+        valid = {name: item_ok(name, states[name]) for name in ORDER}
+        if not self.glasses_entered and inside("glasses", states["glasses"], "anywhere") and settled(states["glasses"]):
+            self.glasses_entered = True
+            self.glasses_invalid = (not folded(states["glasses"])
+                                    or not all(valid[name] and settled(states[name]) for name in ORDER[:-1]))
+        if self.glasses_invalid:
+            valid["glasses"] = False
+        return valid
 
 
-def distance(objects) -> float:
-    """Number of items not yet correctly packed."""
-    return float(sum(not _item_ok(n, objects[n]) for n in PACK))
+_trial = PackingTrial()
 
 
-# -- scripted demo -----------------------------------------------------------------------------------------------------
-ORDER = ("lubricant", "spray", "sealant", "tape", "glasses", "hammer", "wrench", "pliers", "screwdriver")
-# Glasses go in last among the supplies, so nothing is ever carried over them.
-
-# name -> (compartment, across fraction, along fraction, place yaw vs box (deg), grasp yaw vs item (deg))
-# "across" runs along the divider axis, "along" the other box axis; fractions are of the compartment's width/length,
-# measured from its centre. Place yaw 90 = item's asset-x long axis runs along the compartment. Grasp yaw is the
-# direction of the item's long axis, so the fingers close across its short side (hammer's long axis is asset y: +90).
-SLOT = {
-    "glasses": ("supplies", -0.21, -0.32, 0, 0),
-    "sealant": ("supplies", 0.34, -0.29, 90, 0),
-    "tape": ("supplies", -0.23, 0.03, 0, 0),
-    "lubricant": ("supplies", 0.31, 0.07, 0, 0),
-    "spray": ("supplies", 0.00, 0.35, 0, 0),
-    "hammer": ("tools", -0.29, -0.17, 0, 90),
-    "pliers": ("tools", 0.13, -0.17, 90, 0),
-    "screwdriver": ("tools", 0.39, -0.17, 90, 0),
-    "wrench": ("tools", 0.00, 0.35, 0, 0),
-}
-
-GRIP_OVER = 0.012      # TCP this far above the item's centre when grasping (pad tips just below the centre)
-INNER_FLOOR_Z = BOX_FLOOR_Z + 0.015   # GUESS: top of the box's inner floor. Raise/lower after watching a release
-DROP_GAP = 0.01        # release the item this far above the floor
+def reset_trial():
+    global _trial
+    _trial = PackingTrial()
 
 
-def _wrap(a: float) -> float:
-    return (a + math.pi / 2) % math.pi - math.pi / 2
+def score(states):
+    return sum(_trial.evaluate(states).values()) / len(ORDER)
 
 
-def _slot_xy(name: str) -> tuple[float, float]:
-    which, fa, fb = SLOT[name][:3]
-    side = 1.0 if (which == "supplies") == (SUPPLIES_SIGN > 0) else -1.0
-    ax, ot = DIV_AXIS, 1 - DIV_AXIS
-    W = (HALF[ax] - WALL - DIV_WALL) * BOX_SCALE
-    L = 2 * (HALF[ot] - WALL) * BOX_SCALE
-    ca = (DIV_AT + side * (DIV_WALL + HALF[ax] - WALL) / 2) * BOX_SCALE
-    pa, pb = ca + fa * W, fb * L
-    bx, by = (pa, pb) if DIV_AXIS == 0 else (pb, pa)
-    c, s = math.cos(BOX_YAW), math.sin(BOX_YAW)
-    return BOX.pos[0] + c * bx - s * by, BOX.pos[1] + s * bx + c * by
-
-
-def _pick_arm(ctx, pick_xy, place_xy):
-    """The arm whose base is closest to the farther of the pick and place points."""
-    def worst(arm):
-        return max(np.hypot(*(arm.base[:2] - np.array(p))) for p in (pick_xy, place_xy))
-    return min((ctx.left, ctx.right), key=worst)
-    # return ctx.right
-
-
-def _pick_place(ctx, name):
-    from yam_arena.constants import FINGER_CLOSED, FINGER_OPEN
-
-    st = ctx.states()[name]
-    px, py, pz = (float(v) for v in st.pos)
-    R = rot_matrix(st.quat_xyzw)
-    th = math.atan2(R[1, 0], R[0, 0])
-    _, _, _, poff, goff = SLOT[name]
-    tx, ty = _slot_xy(name)
-    arm = _pick_arm(ctx, (px, py), (tx, ty))
-    hz = SPEC[name].size[2] / 2
-    z_pick = max(pz + GRIP_OVER, TOP + 0.015)
-    dz = z_pick - pz                                   # TCP height above the item's centre while held
-    z_place = INNER_FLOOR_Z + DROP_GAP + hz + dz
-    hi = max(TOP + 0.12, BOX_RIM_Z + 0.03) + dz + hz   # carry height: the item's underside clears the box rim
-    g1 = _wrap(th + math.radians(goff))
-    g2 = _wrap(BOX_YAW + math.radians(poff + goff))
-    print(f"[demo] {name}: {arm.name} arm, pick=({px:.3f},{py:.3f}) place=({tx:.3f},{ty:.3f}) hi={hi - TOP:.2f}m", flush=True)
-
-    yield from arm.move((px, py, hi), yaw=g1, finger=FINGER_OPEN, duration=2.0)
-    yield from arm.move((px, py, z_pick), yaw=g1, duration=1.2)
-    yield from arm.grip(FINGER_CLOSED, 0.8)
-    yield from arm.move((px, py, hi), yaw=g1, duration=1.2)
-    yield from arm.move((tx, ty, hi), yaw=g2, duration=2.0)
-    yield from arm.move((tx, ty, z_place), yaw=g2, duration=1.2)
-    yield from arm.grip(FINGER_OPEN, 0.6)
-    yield from arm.move((tx, ty, hi), yaw=g2, duration=1.0)
-    yield from arm.wait(1.0)
-    st = ctx.states()
-    print(f"[demo] {name} -> {compartment(st[name].pos)}, tilt {tilt_deg(st[name]):.0f} deg, score {score(st):.3f}",
-          flush=True)
+def success(states):
+    return all(_trial.evaluate(states).values()) and all(settled(states[name]) for name in ORDER)
 
 
 def demo_script(ctx):
-    """Pack every item one at a time. PACK_ONLY=spray,hammer runs just those (for debugging one item)."""
-    from yam_arena.constants import FINGER_OPEN
+    from packing_motion import pack
+    yield from pack(ctx, ctx.emb.task.module)
 
-    only = [n for n in os.environ.get("PACK_ONLY", "").split(",") if n]
-    print(f"[demo] gripper opens to {FINGER_OPEN} m; box rim {BOX_RIM_Z - TOP:.3f} m above the table", flush=True)
-    for n in (n for n in ORDER if not only or n in only):
-        yield from _pick_place(ctx, n)
-    yield from ctx.right.wait(2.0)
-    st = ctx.states()
-    print(f"[demo] done: score {score(st):.3f} success {success(st)} violations {violations(st)}", flush=True)
+
+install_trial_reset()

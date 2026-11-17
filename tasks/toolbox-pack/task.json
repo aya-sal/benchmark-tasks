@@ -1,0 +1,19 @@
+{
+  "title": "Sort supplies and tools into an open toolbox",
+  "category": "Impact on jobs",
+  "keywords": [
+    "sorting",
+    "toolbox",
+    "upright",
+    "bimanual",
+    "safety glasses"
+  ],
+  "instruction": "Put the grease bottle and spray can upright on the left half of the open toolbox with the sealant tube. Put the hand tools and duct tape on the right half. Fold both temples of the safety glasses, then put them anywhere inside the toolbox last.",
+  "setup": "Two YAM arms and a fixed-open SimReady hard case on the station table. The nine items start at fixed positions, and both safety-glasses temples start open.",
+  "scoring": "1/9 per correctly placed item. The grease bottle and spray can must be within 15 degrees of upright. The glasses may occupy either half and must already have both temples folded at least 75 degrees when first placed, after all other items settle. All items must be correctly packed and still for one second for success.",
+  "run_limit": "3600 steps at 20 Hz, 180 simulated seconds",
+  "reset_notes": "Return all items to their authored starting poses and reopen both glasses temples.",
+  "fidelity": "Uses the SimReady toolbox visuals with a fixed-open lid and floor, wall and lid collision proxies. The continuous cavity is split only for scoring. The glasses retain passive hinges with self-collision disabled.",
+  "scores": "Pending GPU rollout",
+  "media": null
+}

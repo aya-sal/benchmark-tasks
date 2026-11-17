@@ -1,83 +1,63 @@
-# Unlatch a toolbox and open the lid all the way (bring-up draft)
+# Release both toolbox clips and open the lid
 
-A closed hard-case toolbox stands on the table with its two front clips toward the robot. The robot releases the
-clips and swings the lid open to the hinge stop (90 degrees). Scoring is by the lid's angle.
+The two YAM arms face a closed hard-plastic toolbox on the station table. Release the two yellow clips, then lift and push the lid to its 90° stop. The base is anchored at `(0.37, 0, 0.7485)` m, with the hinge away from the arms. The case is 31.4 × 53.1 cm in plan and the clips are 31 cm apart.
 
-**Status: nothing here has run in Isaac Lab yet.** The joint names and limits come from the asset's `physics.usda`;
-the clip positions, the latch's release direction, the thresholds and the whole demo are guesses to tune.
+## Asset
 
-## Files
+The original USD loads with its geometry, materials, bodies and PhysX colliders. It uses metres and Z-up. Its two clips are disjoint mesh islands on one rigid link and one hinge, and it has no articulation root.
 
-| File | What |
-|---|---|
-| `task.py` | The yam_arena task file: the toolbox, a monitor, `success()` and `score()` |
-| `geometry.py` | Asset dimensions from the USD, placement on the station, clip and lid positions |
-| `scenekit.py` | Copied from `lock-before-loading`: loads a USD articulation and reads its joint angles |
-| `demo.py` | First-pass scripted bimanual demo |
-| `inspect_asset.py` | Local (no GPU) script that prints the asset's bodies, joints, limits, colliders and size |
-| `test_toolbox_open.py`, `conftest.py`, `_shim/` | Local scoring tests with a stand-in for `yam_arena`. Delete `_shim/` before submitting |
+`assets/toolbox_open.usdc` is the task-ready layer. It references the original asset, splits the clip geometry and UVs, gives each clip an independent passive joint, and adds small hook and catch colliders. It also targets the actual rigid bodies in the lid and handle joints. At spawn, the task adapter anchors the base at its station pose. The render asset and its relative dependencies should stay together under `assets/`.
 
-## Setup
-
-1. Copy the whole downloaded `storage_toolbox_standard_hardCase_d01` folder to `assets/toolbox/`, so that
-   `assets/toolbox/simready_usd/sm_storage_toolbox_standard_hardCase_d01_01.usd` exists.
-2. Look at what the asset really contains (your own machine, `pip install usd-core`):
-
-       python inspect_asset.py assets/toolbox/simready_usd/sm_storage_toolbox_standard_hardCase_d01_01.usd
-
-3. Run the scoring tests (no GPU): `python -m pytest -q test_toolbox_open.py`.
-
-## Run on the cloud machine
-
-Same pattern as the other tasks (not yet run for this one):
+The converted layer is included. With a Python environment that has NumPy and the OpenUSD `pxr` bindings, inspect or regenerate it from this directory.
 
 ```bash
-python demo.py task.py demo_out --max-steps 1200
-
-inspect-robots run --embodiment yam_arena --policy dream \
-  -E task=task.py -E object_jitter=0 -E control_hz=20 -E cam_width=320 -E cam_height=176 \
-  --instruction "Open the toolbox: release both latches and swing the lid all the way open." \
-  --scorer task_score --max-steps 1200 --store-frames --log-dir ~/yam-eval/toolbox-dream
+python inspect_asset.py assets/storage_toolbox*/simready_usd/sm*.usd
+python prepare_asset.py
+python inspect_asset.py assets/toolbox_open.usdc
 ```
 
-## Debugging, in the order I'd do it
+## Run a trial
 
-1. **Does the toolbox load as an articulation?** The task raises an error listing the joint names it found. If the
-   list is empty, the USD has no articulation root. `inspect_asset.py` shows whether one exists once the payloads
-   compose (the PhysX payload may add it). If none, make `assets/toolbox/toolbox.usda` that references the asset and
-   applies `PhysicsArticulationRootAPI` to `/RootNode`, and point `USD` in `task.py` at it. Don't add a second root
-   if one already exists: nested roots fail.
-2. **Does the latch actually block the lid?** Before running the demo, push the lid's front edge with the latch
-   engaged. If the lid opens anyway, the hooks don't block it and the task has a shortcut: fix the collision shapes or
-   add a blocker. Run this check before anything else about scoring.
-3. **Where does the latch rest, and which way does it release?** Check the printed `latch` angle in the first
-   frames. If it is not near 0, set the initial `joint_pos` in `task.py`. Tune `LATCH_RELEASED_DEG` and the demo's
-   `RELEASE_DIR`.
-4. **Clip positions and reach.** Replace `CLIP_TAB`, `CLIP_Y` and `BOX_XY` in `geometry.py` after looking at the
-   scene. Check `worst_ik_mm` in `result.json`. The lid's free edge is about 0.48 m above the table when fully open,
-   which may be out of reach: that is why the demo's last stage pushes the lid over from underneath, at a small radius
-   from the hinge. By the USD's numbers the lid's weight should carry it onto the stop once it is past about
-   80 degrees. Confirm this in the sim.
-5. **Does the box slide?** It is a 3 kg floating body. If it moves more than 3 cm, raise `friction` on the `UsdBody`
-   or fix its base in the wrapper USD.
-6. **Joint feel.** The lid hinge and handle have no friction in the asset; `joint_damping` in `task.py` is what
-   settles them. If the lid bounces off the stop, raise it. `STILL_DEG` and `STILL_STEPS` set how still the lid has to
-   be.
-7. **Grasp.** The lid-edge grasp in `demo.py` (fingers closing along x across the lip) is a guess.
+Activate the YAM Isaac Lab-Arena environment on a machine with a compatible NVIDIA GPU, then run from this directory.
+
+```bash
+source /data/IsaacLab-Arena/yam.env
+python demo.py task.py demo_out --max-steps 1200
+```
+
+The script turns each gripper 90° so its jaws cross the clasp edge, approaches 20° below horizontal, and swings both clips outward. It raises the lid using the clips, and uses one gripper to hold the lid while the other gets underneath and pushes. It exits a phase early if the measured joint angles are too low to proceed. It writes a setup image, camera videos and `result.json` with the final angles, score, phase and worst IK error per arm. Add `--no-record` to skip saving camera media.
+
+To evaluate Dream-1 through the standard benchmark pipeline, run:
+
+```bash
+inspect-robots run --embodiment yam_arena --policy dream \
+  -E task=task.py -E object_jitter=0 -E control_hz=20 -E cam_width=320 -E cam_height=176 \
+  --instruction "Release both yellow toolbox clips, then lift and push the lid all the way open." \
+  --scorer task_score --max-steps 1200 --store-frames --log-dir demo_out/dream
+```
+
+Each trial allows 1,200 steps at 20 Hz, or 60 simulated seconds. The layout is fixed across seeds. Reset restores all four joint positions and velocities.
+
+## Check clasp reach
+
+Run `python measure_grasp.py` with the same OpenUSD Python environment used for asset inspection. It prints the clasp bounds, the two mesh intersections along the jaw-closing axis, the commanded TCP, and the TCP computed from the YAM URDF. Coordinates are in station metres.
+
+At the closed pose, the selected clasp faces intersect the jaw axis at `(0.227660, ±0.155000, 0.875644)` and `(0.233075, ±0.155000, 0.890522)`, 15.83 mm apart. Their midpoint sets the grasp target. The commanded TCP is `(0.227549, ±0.155000, 0.884109)`. Positive Y is the left arm.
+
+The straight insertion crosses the clasp and case on the upper jaw centreline, so free-space IK alone cannot establish reach under contact. The demo logs the actual TCP and finger opening after closing and before swinging in `result.json` under `grasp_tracking`. A short TCP in the simulation indicates that the approach needs clearance. A TCP at target with a finger opening near the 7.5 mm command suggests the clasp was missed or slipped out. These measurements still need a GPU rollout.
 
 ## Scoring
 
 | Score | Condition |
 |---|---|
-| 1.0 | lid open at least 85 degrees and still (the hinge stops at 90), toolbox moved less than 3 cm; success holds 1 s |
-| 0.75 | lid open at least 45 degrees |
-| 0.5 | lid open at least 10 degrees |
-| 0.25 | latch bar turned at least 10 degrees from its rest angle, lid still shut |
-| 0 | anything else, or the toolbox slid more than 3 cm at any point |
+| 0 | Neither clip is at least 25° open |
+| 0.25 | One clip is at least 25° open |
+| 0.5 | Both clips are at least 25° open |
+| 0.75 | Both clips are released and the lid is at least 45° open |
+| 1.0 | Both clips are released and the lid stays at or above 85° with angular speed at most 2°/s for one second |
 
-Angles are taken from the starting rest angles with absolute values, so the joints' signs don't matter.
+Partial credit uses the final state. Full credit uses Arena's one-second success hold.
 
-## Credit
+USD composition, joint targets, scorer boundaries and nominal robot IK were checked offline. GPU validation is pending for resets under PhysX, hook contact with zero or one clip released, and the full scripted rollout. Real-time runtime per trial is pending that rollout.
 
-The toolbox is NVIDIA's SimReady asset `storage_toolbox_standard_hardCase_d01`, CC-BY-4.0. Keep the asset's
-`LICENSE.txt` with it.
+Original asset by NVIDIA, `storage_toolbox_standard_hardCase_d01`, CC BY 4.0. The license is included in the original asset's `.metadata` directory.

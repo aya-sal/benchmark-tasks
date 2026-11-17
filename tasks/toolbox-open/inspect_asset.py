@@ -51,7 +51,7 @@ def main(path: str, chosen: list[str]) -> int:
             return 1
         vs.SetVariantSelection(value)
         print(f"\nselected {name} = {value}")
-    prims = list(stage.TraverseAll())
+    prims = list(Usd.PrimRange.Stage(stage, Usd.TraverseInstanceProxies()))
 
     roots = [p for p in prims if p.HasAPI(UsdPhysics.ArticulationRootAPI)]
     print("\narticulation roots:", [str(p.GetPath()) for p in roots] or "NONE")
@@ -108,8 +108,7 @@ def main(path: str, chosen: list[str]) -> int:
 
     print()
     if not roots:
-        print("NOTE: no ArticulationRootAPI. Isaac Lab will not treat this as an articulation as it stands; see README.md,"
-              " 'Debugging'. The PhysX payload may add one: open payloads/PhysX/enabled.usda to check.")
+        print("NOTE: no ArticulationRootAPI. For this toolbox, prepare_asset.py builds a task-ready layer.")
     return 0
 
 

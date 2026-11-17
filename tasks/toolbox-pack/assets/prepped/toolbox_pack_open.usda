@@ -1,0 +1,152 @@
+#usda 1.0
+(
+    defaultPrim = "RootNode"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "RootNode" (
+    prepend apiSchemas = ["PhysicsRigidBodyAPI"]
+    prepend references = @../storage_toolbox_standard_hardCase_d01/simready_usd/sm_storage_toolbox_standard_hardCase_d01_01.usd@
+    variants = {
+        string PhysX = "Enabled"
+    }
+)
+{
+    over "Geometry"
+    {
+        over "hand_01_obj_00" (
+            delete apiSchemas = ["PhysicsRigidBodyAPI"]
+            instanceable = false
+        )
+        {
+            matrix4d xformOp:transform = ( (2.220446049250313e-16, 0, 1, 0), (0, 1, 0, 0), (-1, 0, 2.220446049250313e-16, 0), (-0.19876722359999996, -0.000002349384204, 0.315014831664, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+
+            over "hand_01_mesh_00" (
+                delete apiSchemas = ["PhysicsMassAPI"]
+            )
+            {
+                bool physics:collisionEnabled = 0
+            }
+        }
+
+        over "top_01_obj_00" (
+            delete apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            instanceable = false
+        )
+        {
+            matrix4d xformOp:transform = ( (2.220446049250313e-16, 0, 1, 0), (0, 1, 0, 0), (-1, 0, 2.220446049250313e-16, 0), (-0.1540775236, 0.00003459006257, 0.1651678001, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+
+            over "top_01_mesh_00" (
+                delete apiSchemas = ["PhysicsMassAPI"]
+            )
+            {
+                bool physics:collisionEnabled = 0
+            }
+        }
+
+        over "lock_01_obj_00" (
+            delete apiSchemas = ["PhysicsRigidBodyAPI"]
+            instanceable = false
+        )
+        {
+            matrix4d xformOp:transform = ( (2.220446049250313e-16, 0, 1, 0), (0, 1, 0, 0), (-1, 0, 2.220446049250313e-16, 0), (-0.16031713159999994, 7.333121488e-8, 0.4630545293, 1) )
+            uniform token[] xformOpOrder = ["xformOp:transform"]
+
+            over "lock_01_mesh_00" (
+                delete apiSchemas = ["PhysicsMassAPI"]
+            )
+            {
+                bool physics:collisionEnabled = 0
+            }
+        }
+
+        over "box_01_obj_00" (
+            delete apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+            instanceable = false
+        )
+        {
+            over "box_01_mesh_00" (
+                delete apiSchemas = ["PhysicsMassAPI"]
+            )
+            {
+                bool physics:collisionEnabled = 0
+            }
+        }
+    }
+
+    over "Joints" (
+        active = false
+    )
+    {
+    }
+
+    def Cube "floor" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1
+        token visibility = "invisible"
+        float3 xformOp:scale = (0.257, 0.498, 0.01565)
+        double3 xformOp:translate = (0.0005000000000000004, 0, 0.007825)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Cube "front" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1
+        token visibility = "invisible"
+        float3 xformOp:scale = (0.027, 0.498, 0.151)
+        double3 xformOp:translate = (0.1255, 0, 0.0905)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Cube "rear" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1
+        token visibility = "invisible"
+        float3 xformOp:scale = (0.039, 0.498, 0.1592)
+        double3 xformOp:translate = (-0.1315, 0, 0.09459999999999999)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Cube "side_left" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1
+        token visibility = "invisible"
+        float3 xformOp:scale = (0.226, 0.02, 0.131)
+        double3 xformOp:translate = (0, 0.239, 0.08049999999999999)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Cube "side_right" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1
+        token visibility = "invisible"
+        float3 xformOp:scale = (0.226, 0.02, 0.131)
+        double3 xformOp:translate = (0, -0.239, 0.08049999999999999)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+
+    def Cube "open_lid" (
+        prepend apiSchemas = ["PhysicsCollisionAPI"]
+    )
+    {
+        double size = 1
+        token visibility = "invisible"
+        float3 xformOp:scale = (0.079, 0.528, 0.305)
+        double3 xformOp:translate = (-0.1735, 0, 0.3165)
+        uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:scale"]
+    }
+}
+

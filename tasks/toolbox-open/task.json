@@ -1,13 +1,13 @@
 {
-  "title": "Unlatch a toolbox and open the lid all the way",
+  "title": "Release both toolbox clips and open the lid",
   "category": "Impact on jobs",
-  "keywords": ["toolbox", "latches", "hinged lid", "bimanual", "workshop"],
-  "instruction": "Open the toolbox: release both latches and swing the lid all the way open.",
-  "context": "Opening a latched tool case is the first step of most bench work, and a lid left half open or a latch left half released is a pinch and drop hazard. Done by: machinists, mechanics and electricians.",
-  "setup": "TODO verify every [bracket] from the asset. A closed hard-case toolbox ([L x W x H] cm; plastic body, 3 kg; yellow-and-black lid, 0.5 kg; chrome-plated metal clips) stands on the oak table with its two front clips toward the robot, [x] cm out from the arm bases' line and centred on the midline, its hinge on the far side. The two clips sit [spacing] cm apart on a single latch bar and each hook over a catch on the box; the lid has a folding carry handle. The lid hinge stops at 90 degrees.",
-  "scoring": "Measured with a phone protractor on the lid's angle from closed. 1.0 if the lid is open at least 85 degrees and still for 1 s, and the toolbox has not slid more than 3 cm at any point. 0.75 if the lid is open at least 45 degrees. 0.5 if open at least 10 degrees. 0.25 if the latch bar is released (turned at least [10] degrees from where it rested) with the lid still shut. Otherwise 0. 0 if the toolbox slid more than 3 cm at any point.",
-  "run_limit": "1,200 steps (1 minute at 20 Hz)",
-  "reset_notes": "Close the lid and push the latch bar back into its catches.",
-  "fidelity": "The toolbox is NVIDIA's SimReady hard-case asset, CC-BY-4.0, with its own mass, friction and hinge limits. In the asset the two clips are one rigid latch bar: releasing either clip releases both, so the simulation cannot tell whether one arm or two released them, and the task does not require two arms. The latch holds the lid shut by contact between the clip hooks and the box's catches. The lid hinge and handle are frictionless joints with light damping [value]. [Any scaling or base fixing applied.]",
-  "scores": "Dream-1 run: TODO; demo: TODO"
+  "keywords": ["toolbox", "latches", "hinged lid", "bimanual"],
+  "instruction": "Release both yellow toolbox clips, then lift and push the lid all the way open.",
+  "setup": "A closed 31.4 × 53.1 cm hard-plastic toolbox is fixed to the YAM station table at (0.37, 0) m, with its rear hinge away from the arms. The two yellow clips are 31 cm apart. The base is 3 kg and the lid is 0.5 kg.",
+  "scoring": "At the end, 0.25 for one clip at least 25 degrees open, 0.50 for both, and 0.75 for both plus at least 45 degrees of lid opening. Success scores 1.0 when both clips meet the release threshold and the lid stays at or above 85 degrees at an angular speed of at most 2 degrees per second for one second.",
+  "run_limit": "1,200 control steps (60 simulated seconds at 20 Hz)",
+  "reset_notes": "Reset both clips and the lid to their closed angular positions and return both arms to ready.",
+  "fidelity": "The supplied SimReady hard-case visual meshes and materials are reused. Each yellow clip has a separate passive hinge. Small box colliders approximate the hooks and catches. The base is anchored so the task isolates unlatching and opening.",
+  "scores": "Pending a GPU rollout",
+  "media": null
 }

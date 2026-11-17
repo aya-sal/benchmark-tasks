@@ -1,0 +1,64 @@
+#usda 1.0
+(
+    defaultPrim = "RootNode"
+    metersPerUnit = 1
+    upAxis = "Z"
+)
+
+def Xform "RootNode" (
+    prepend references = @../ppe_eyeProtection_safetyGlasses_a01/simready_usd/sm_ppe_eyeProtection_safetyGlasses_a01_01.usd@
+    variants = {
+        string PhysX = "Enabled"
+    }
+)
+{
+    over "Geometry"
+    {
+        over "frame_01_obj_00" (
+            prepend apiSchemas = ["PhysicsArticulationRootAPI"]
+            instanceable = false
+        )
+        {
+        }
+
+        over "lens_01_obj_00" (
+            instanceable = false
+        )
+        {
+        }
+
+        over "templeLeft_01_obj_00" (
+            instanceable = false
+        )
+        {
+        }
+
+        over "templeRight_01_obj_00" (
+            instanceable = false
+        )
+        {
+        }
+    }
+
+    over "Joints"
+    {
+        over "joint_lens_01_joint_00"
+        {
+            rel physics:body0 = </RootNode/Geometry/frame_01_obj_00>
+            rel physics:body1 = </RootNode/Geometry/lens_01_obj_00>
+        }
+
+        over "joint_templeLeft_01_joint_00"
+        {
+            rel physics:body0 = </RootNode/Geometry/frame_01_obj_00>
+            rel physics:body1 = </RootNode/Geometry/templeLeft_01_obj_00>
+        }
+
+        over "joint_templeRight_01_joint_00"
+        {
+            rel physics:body0 = </RootNode/Geometry/frame_01_obj_00>
+            rel physics:body1 = </RootNode/Geometry/templeRight_01_obj_00>
+        }
+    }
+}
+
