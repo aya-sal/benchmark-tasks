@@ -1,0 +1,19 @@
+{
+  "title": "Price two boxed products with a hand label gun: squeeze out a label, touch it onto each box's price panel",
+  "category": "Impact on jobs",
+  "keywords": [
+    "retail",
+    "price gun",
+    "labelling",
+    "stocking",
+    "tool use"
+  ],
+  "instruction": "Stick one price label from the price gun in the white price panel on top of each box.",
+  "context": "Pricing stock with a hand label gun is everyday work for retail stockers and order fillers. Each item gets one label, wholly inside its price panel so it covers neither the barcode nor the artwork, and each label takes one full squeeze of the gun's lever and a touch of its nose on the product: the lever has to be let out before the gun feeds again, and a stray squeeze wastes a label or sticks it to the bench.",
+  "setup": "Bench top is z = 0; x is away from the arm bases, y to the left. Box A: printed carton board, blue, 160 x 110 x 45 mm, 150 g, lying flat, centred at x 0.315, y -0.130 m, not fixed. A white 40 x 28 mm price panel (long edge along x) is printed on its top face beside a barcode, centred at x 0.280, y -0.110: 35 mm nearer the arms and 20 mm left of the top's centre. Box B: printed carton board, green, 80 x 60 x 100 mm, 200 g, standing upright, centred at x 0.220, y 0.005, not fixed; the same panel is printed in the middle of its top face. Price gun (250 g): off-white body 90 x 36 x 30 mm, a black handle 16 x 30 x 47 mm standing on the back of the body, a red squeeze lever (8 x 26 x 43 mm bar hinged at its foot) in front of the handle, sprung 16 degrees forward (12 mm at its tip, about 9 to 10 N), and a 16 mm rubber roller, 26 mm wide, on a free axle at the nose, its bottom 8 mm below the body's. It is loaded with six orange 22 x 12 mm labels. It lies on a fixed 50 x 70 x 20 mm rubber rest block centred at x 0.150, y -0.250, nose toward +y, so the roller hangs 12 mm clear of the bench.",
+  "scoring": "Measured with a rule on the boxes and a count of the labels: 0.25 a label stuck anywhere on either box. 0.5 one box has a label lying wholly inside its 40 x 28 mm price panel. 0.75 both boxes do. 1.0 also exactly one label on each box and none anywhere else (two labels gone from the gun's six: none on the bench or rest, none wasted), both boxes upright (within 10 degrees) and within 20 mm of where they started, the gun put down (its lowest point within 25 mm of the bench top, no gripper within 10 cm of its handle), both grippers more than 5 cm from both boxes, held 1 s.",
+  "run_limit": "1,600 steps (80 seconds at 20 Hz)",
+  "fidelity": "PhysX 240 Hz. The squeeze lever is a real sprung hinge squeezed by the gripper; its measured angle drives the feed: at 85 % of its travel one label is fed to the nose (most real guns feed on the release stroke), and it must come back out to 30 % before it can feed again. Labels are not a film: while one is at the nose, the roller coming within 2 mm of a box face, the bench or the rest sticks the whole label there, centred under the roller with its long edge along the roller. Squeezing again with a label still at the nose wastes it (counted, not drawn). No adhesion force, peel, wipe or printing. The gun's handle and lever stand upright so a top-down parallel gripper can squeeze them (a hand-held gun's are raked back), and the gun lies on a rest so its nose is off the bench. The roller turns on a free axle.",
+  "scores": "Dream-1 run: 0 after 993 steps (49.65 simulated seconds); termination: task_budget_limit (the runner's per-task request budget ran out before the 1,600-step limit). Scripted demo: 1 after 567 steps.",
+  "media": "M-B2PU3U"
+}
