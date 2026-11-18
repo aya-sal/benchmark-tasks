@@ -1,0 +1,21 @@
+{
+  "title": "Price two boxed products on a moving belt with a hand label gun",
+  "category": "Impact on jobs",
+  "keywords": [
+    "retail",
+    "price gun",
+    "labelling",
+    "conveyor",
+    "stocking",
+    "tool use",
+    "timing"
+  ],
+  "instruction": "Stick one price label from the price gun in the white price panel on top of each box as the boxes ride past on the belt.",
+  "context": "On a packing or pricing line, stock rides a slow belt past a station where a stocker prices each item with a hand label gun without stopping the line. Each item gets one label, wholly inside its price panel, and each label takes one full squeeze of the gun's lever and a touch of its nose on the moving product: the lever has to be let out before the gun feeds again, and a stray squeeze wastes a label or sticks it to the belt.",
+  "setup": "Bench top is z = 0; x is away from the arm bases, y to the left. A flat-belt conveyor (charcoal PVC belt 160 mm wide, surface 20 mm above the bench) runs from y -0.720 to y +0.600 at x 0.290, with aluminium side rails and an end stop at the left end. From the first control step the belt ramps up over 0.5 s to a steady 20 mm/s toward +y and does not stop. Steel carrier plates (8 mm thick, 10 mm larger than each box) ride the belt and are driven exactly along it. Box B (green, printed carton board, 90 x 100 x 50 mm, 220 g) stands on its carrier centred at x 0.290, y -0.460; a white 40 x 28 mm price panel is printed in the middle of its top face. Box A (blue, 110 x 160 x 45 mm, 180 g) lies flat on its carrier centred at x 0.290, y -0.620, 30 mm behind box B; its panel is offset 20 mm toward -x and 30 mm toward +y of the top's centre, beside a barcode. Price gun (250 g) on a fixed 50 x 70 x 20 mm rubber rest at x 0.130, y -0.320, nose toward +y, roller clear of the bench and of the belt; body 90 x 36 x 30 mm, black handle, red squeeze lever, 16 mm roller, six orange 22 x 12 mm labels.",
+  "scoring": "Measured with a rule on the boxes and a count of the labels: 0.25 a label stuck anywhere on either box. 0.5 one box has a label lying wholly inside its 40 x 28 mm price panel. 0.75 both boxes do. 1.0 also exactly one label on each box and none anywhere else (two labels gone from the gun's six: none on the belt, the bench or the rest, none wasted), both boxes upright (within 10 degrees) and within 20 mm of their place on the belt (the outline that rides with them), the gun put down off the conveyor (its lowest point within 25 mm of the bench top and none of it over the belt, no gripper within 10 cm of its handle), both grippers more than 5 cm from both boxes, held 1 s.",
+  "run_limit": "960 steps (48 seconds at 20 Hz)",
+  "fidelity": "PhysX 240 Hz. Carriers are driven exactly along the belt (pose and velocity written each physics step); boxes ride by friction and can be held back or knocked off. The squeeze lever is a real sprung hinge: at 85 % travel one label feeds (most real guns feed on release) and must return to 30 % to feed again. Labels are not a film: roller within 2 mm of a surface sticks the whole label there. Squeezing again first wastes it. Handle and lever stand upright for a top-down gripper.",
+  "scores": "Dream-1 run: 0 after 945 steps (47.25 simulated seconds); termination: task_budget_limit (the runner's per-task request budget ran out before the 960-step limit). Scripted demo: 1 after 703 steps.",
+  "media": "M-J9XTGS"
+}
