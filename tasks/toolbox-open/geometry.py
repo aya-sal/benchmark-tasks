@@ -13,7 +13,7 @@ CLIP_PIVOT = np.array([0.1438092, 0.0, 0.1714074])
 CLIP_Y = 0.155
 # Midpoint of the measured clasp faces along the jaw-closing axis at the grasp.
 # See measure_grasp.py for the USD section and station-space coordinates.
-CLIP_TAB = np.array([-0.004177, 0.0, -0.036824])
+CLIP_TAB = np.array([0.004191, 0.0, -0.042907])
 
 
 def rotate_open(point, degrees):

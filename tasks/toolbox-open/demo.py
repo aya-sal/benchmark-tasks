@@ -120,17 +120,16 @@ class Ctx:
         return Action(data=pack(self.left.command(), self.right.command()))
 
 
-CLIP_APPROACH_PITCH = -70.0  # tool points forward and 20 degrees below horizontal
+CLIP_APPROACH_PITCH = -60.0  # enter on either side of the lower tab, 30 degrees downward
 CLIP_STOP = 85.0
-CLIP_PAD_CONTACT = 0.003  # contact point ahead of the TCP, inward from the pad tip
-CLIP_INSERT_OPENING = 0.45
+CLIP_PAD_CONTACT = 0.009  # leave 4 mm of pad ahead of the side-face contact
+CLIP_INSERT_OPENING = 1.0
 
 
 def clip_rotation(side, pitch):
     from yam_arena.demo import grip_rotation
 
-    yaw = -math.pi / 2 if side == "left" else math.pi / 2
-    return rotation_y(pitch) @ grip_rotation(yaw)
+    return rotation_y(pitch) @ grip_rotation()
 
 
 def clip_grasp_pose(side, contact, pitch):
@@ -144,7 +143,7 @@ def grasp_clip(arm, g):
     yield from arm.move(pregrasp + [0, 0, 0.075], rot, 2.5)
     yield from arm.move(pregrasp, rot, 1.0, grip=CLIP_INSERT_OPENING)
     yield from arm.move(pos, rot, 1.5)
-    yield from arm.set_grip(0.08)
+    yield from arm.set_grip(0.68)
 
 
 def swing_clip(arm, g):
@@ -154,14 +153,14 @@ def swing_clip(arm, g):
         yield
 
 
-def raise_lid(arm, g):
-    tab = g.clip_tab(arm.side, CLIP_STOP)
+def raise_lid(arm, g, clip_angle):
+    tab = g.clip_tab(arm.side, clip_angle)
     radius = (np.asarray(g.ORIGIN)[0] - tab[0]) - g.HINGE[0]
     height = tab[2] - g.ORIGIN[2] - g.HINGE[2]
     y = g.ORIGIN[1] - tab[1]
     for angle in np.linspace(0, 32, 80):
         contact = g.place(g.HINGE + g.rotate_open((radius, y, height), angle))
-        pitch = CLIP_APPROACH_PITCH + CLIP_STOP - 2 * angle
+        pitch = CLIP_APPROACH_PITCH + CLIP_STOP - angle
         arm.aim(*clip_grasp_pose(arm.side, contact, pitch))
         yield
 
@@ -201,11 +200,11 @@ def script(ctx, g):
     ctx.stage = "release clips"
     yield from together(*(swing_clip(arm, g) for arm in arms))
     lid, left, right = ctx.angles()
-    if min(left, right) < 80:
-        ctx.stage = "clip grasp did not reach the open stops"
+    if min(left, right) < ctx.task.RELEASE_DEG:
+        ctx.stage = "clip grasp did not release both clips"
         return
     ctx.stage = "lift from the clips"
-    yield from together(*(raise_lid(arm, g) for arm in arms))
+    yield from together(*(raise_lid(arm, g, angle) for arm, angle in zip(arms, (left, right))))
     lid, _, _ = ctx.angles()
     if lid < 24:
         ctx.stage = "lid did not lift far enough to push"
