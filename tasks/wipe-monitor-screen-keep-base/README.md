@@ -2,7 +2,7 @@
 
 Eight oily marks sit on the glass of an LG UltraGear 27GX790A. The monitor stands 20 cm forward of the centre of the desk, and the cloth is a soft sheet. Walking the foot off the desk scores 0 even if the glass was already clean. The scripted policy wipes each mark vertically and lets go.
 
-The demo and the Dream-1 run have not been executed here. `test_score.py` checks the layout and the score table without Isaac Sim. The scripted demo reaches 1.0 in 1166 steps (seed 1).
+`test_score.py` checks the layout and the score table without Isaac Sim. The scripted demo reaches 1.0 in 1166 steps (seed 1). Dream-1 beta scores 0.0 and uses the full 2400 steps (seed 1, log `model_out_dream/adhoc_e7bf52de.json`).
 
 ## The monitor
 
@@ -34,10 +34,10 @@ inspect-robots run --embodiment yam_arena --policy yam_scripted \
   --log-dir tuck_log
 inspect-robots run --embodiment yam_arena --policy dream \
   -P model=dreamlabs/dream-1-beta -P rows_per_request=4 \
-  -E task=task.py -E object_jitter=0 -E control_hz=20 -E device=cpu \
+  -E task=task.py -E object_jitter=0 -E control_hz=20 \
   -E cam_width=320 -E cam_height=176 \
   --instruction "Wipe every fingerprint off the monitor glass with the cloth. Leave the monitor standing on the desk, and let go." \
-  --scorer task_score --max-steps 2400 --seed 1 --store-frames --log-dir model_out
+  --scorer task_score --max-steps 2400 --seed 1 --store-frames --log-dir model_out_dream
 ```
 
 `DEMO_VARIANT=shove` drives the cloth into the outer bezel and 10 cm sideways.
