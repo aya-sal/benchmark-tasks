@@ -169,14 +169,22 @@ def _tick(environment):
 
 _tick.env = None
 _tick.n = 0
+_was_held = False
 
 
 def _update(objects):
     """Apply this control step once. ``score`` and ``success`` both call in."""
+    global _was_held
     if _tick.env is None or _STATE.get("seen") == _tick.n:
         return
     _STATE["seen"] = _tick.n
     obs = _observe(_tick.env, objects["cloth"])
+    if obs["held"]:
+        _was_held = True
+    elif _was_held:
+        cx, cy, cz = obs["cloth_pos"]
+        print(f"[step {_tick.n}] CLOTH DROPPED at ({cx:.3f}, {cy:.3f}, {cz:.3f})")
+        _was_held = False
     scoring.step(_STATE, obs)
     hide_marks(_STATE["clean"])
 
@@ -254,28 +262,46 @@ def _fingertip_tcp(world_y, world_z, rotation):
     return point - np.asarray(rotation)[:, 2] * PAD_TIP_PAST_TCP
 
 
-def _stain_rubs():
-    """Slow sideways scrubs through each fingerprint, so the fingertip path crosses the square.
-
-    The scrub runs 2 cm to either side of the stain center. The far-left column is reached with
-    the hand turned, after a pull-back, because a straight wrist cannot get there.
-    """
+def _stain_rubs_right():
+    """Scrub the 6 stains reachable by the right arm (world y ≤ +0.08)."""
     import numpy as np
 
     points = []
     for local in scoring.MARKS:
         world = scoring.yaw180(local, scoring.HEIGHT)
-        points.append((world[1], world[2]))
+        if world[1] <= 0.09:
+            points.append((world[1], world[2]))
     points.sort()
     moves = []
     span = 0.02
     for index, (y, z) in enumerate(points):
         rot = _rub_rotation(y)
-        if index and points[index - 1][0] < 0.2 <= y:
-            moves.append((1.2, np.array([0.36, 0.16, 1.00]), rot, "turn to the far stains"))
-        elif index and abs(points[index - 1][0] - y) > 0.01:
+        if index and abs(points[index - 1][0] - y) > 0.01:
             py, pz = points[index - 1]
             moves.append((0.5, np.array([0.40, py, pz]), _rub_rotation(py), "back off"))
+        center = _fingertip_tcp(y, z, rot)
+        moves.append((1.2, center, rot, "onto the stain"))
+        moves.append((0.5, center, rot, "settle on the stain"))
+        moves.append((0.8, _fingertip_tcp(y - span, z, rot), rot, "rub across"))
+        moves.append((1.0, _fingertip_tcp(y + span, z, rot), rot, "rub across the stain"))
+        moves.append((0.6, center, rot, "back on the stain"))
+    return moves
+
+
+def _stain_rubs_left():
+    """Scrub the 2 far-left stains (world y ≈ +0.24) with the left arm."""
+    import numpy as np
+
+    points = []
+    for local in scoring.MARKS:
+        world = scoring.yaw180(local, scoring.HEIGHT)
+        if world[1] > 0.09:
+            points.append((world[1], world[2]))
+    points.sort()
+    rot = _wipe_rotation()
+    moves = []
+    span = 0.02
+    for index, (y, z) in enumerate(points):
         center = _fingertip_tcp(y, z, rot)
         moves.append((1.2, center, rot, "onto the stain"))
         moves.append((0.5, center, rot, "settle on the stain"))
@@ -298,37 +324,39 @@ def _waypoints(moves):
 
 
 def demo():
-    """Left hand pushes the cloth's left edge to the right. The right hand then pinches the bunch."""
+    """Two-arm wipe: left crinkles, right wipes 6 stains and drops cloth, left picks up and wipes the last 2."""
     import numpy as np
 
     from yam_arena import ik, station
     from yam_arena.constants import FINGER_CLOSED, FINGER_OPEN, PAD_TIP_PAST_TCP, READY
-    from yam_arena.demo import ArmPlan
+    from yam_arena.demo import ArmPlan, grip_rotation
 
     ArmPlan.target = _hold_target
     x, y, _ = scoring.CLOTH_POS
     z = scoring.TOP + PAD_TIP_PAST_TCP
     half = scoring.CLOTH_SIZE[1] / 2
-    # Just outside the left edge (+Y), then across the sheet toward the robot's right (-Y).
+
+    left_ready_pos, left_ready_rot = ik.tcp_pose(np.array(READY, float), np.asarray(station.BASES["left"], float))
+    right_ready_pos, right_ready_rot = ik.tcp_pose(np.array(READY, float), np.asarray(station.BASES["right"], float))
+
+    # ── Phase 1: Left arm crinkles the cloth ──────────────────────────
     edge_y = y + half + 0.02
     stop_y = y
-    left = [
+    left_phase1 = [
         (1.6, (x, edge_y, z + 0.12), None, FINGER_CLOSED, "above the left edge", 0.0),
         (1.0, (x, edge_y, z), None, FINGER_CLOSED, "down on the edge", 0.0),
         (2.2, (x, stop_y, z), None, FINGER_CLOSED, "push the edge right", 0.0),
         (0.8, (x, stop_y, z + 0.14), None, FINGER_CLOSED, "lift clear", 0.0),
         (0.8, (x, edge_y + 0.04, z + 0.14), None, FINGER_CLOSED, "back off", 0.0),
+        (0.8, tuple(float(v) for v in left_ready_pos), left_ready_rot, FINGER_OPEN, "ready", 0.0),
     ]
-    left_ready_pos, left_ready_rot = ik.tcp_pose(np.array(READY, float), np.asarray(station.BASES["left"], float))
-    left.append((0.8, tuple(float(v) for v in left_ready_pos), left_ready_rot, FINGER_OPEN, "ready", 0.0))
+    phase1_t = sum(m[0] for m in left_phase1)
 
-    ready_pos, ready_rot = ik.tcp_pose(np.array(READY, float), np.asarray(station.BASES["right"], float))
-    wait = sum(move[0] for move in left)
-    # The pile sits just to the right of where the push stops.
+    # ── Phase 2: Right arm picks up cloth and wipes 6 stains ─────────
     bunch = (x, stop_y - 0.03, z)
     face = _wipe_rotation()
-    right = [
-        (wait, tuple(float(v) for v in ready_pos), ready_rot, FINGER_OPEN, "wait", 0.0),
+    right_all = [
+        (phase1_t, tuple(float(v) for v in right_ready_pos), right_ready_rot, FINGER_OPEN, "wait for crinkle", 0.0),
         (1.6, (bunch[0], bunch[1], bunch[2] + 0.12), None, FINGER_OPEN, "above the bunch", 0.0),
         (1.2, bunch, None, FINGER_OPEN, "down onto the bunch", 0.0),
         (0.8, bunch, None, FINGER_OPEN, "open on the bunch", 0.0),
@@ -337,6 +365,32 @@ def demo():
         (1.0, (bunch[0], bunch[1], bunch[2] + 0.18), None, FINGER_CLOSED, "lift the cloth", 0.0),
         (1.6, (0.36, -0.10, 1.00), face, FINGER_CLOSED, "turn toward the glass", 0.0),
     ]
-    for duration, pos, rot, label in _stain_rubs():
-        right.append((duration, tuple(float(v) for v in pos), rot, FINGER_CLOSED, label, 0.0))
-    return {"left": _waypoints(left), "right": _waypoints(right)}
+    for duration, pos, rot, label in _stain_rubs_right():
+        right_all.append((duration, tuple(float(v) for v in pos), rot, FINGER_CLOSED, label, 0.0))
+
+    # ── Phase 3: Right arm drops cloth and goes to ready ──────────────
+    right_all += [
+        (0.8, (0.36, 0.00, 1.00), face, FINGER_CLOSED, "back from glass", 0.0),
+        (0.4, (0.36, 0.00, 1.00), face, FINGER_OPEN, "release cloth", 0.0),
+        (1.0, tuple(float(v) for v in right_ready_pos), right_ready_rot, FINGER_OPEN, "right ready", 0.0),
+    ]
+    right_t = sum(m[0] for m in right_all)
+
+    # ── Phase 4: Left arm picks up cloth at drop zone and wipes 2 stains ─
+    left_face = _wipe_rotation()
+    drop = (0.36, 0.00, z)  # cloth falls near where the right arm released it
+    left_phase2 = [
+        (right_t - phase1_t + 2.0, tuple(float(v) for v in left_ready_pos), left_ready_rot, FINGER_OPEN, "wait for right arm", 0.0),
+        (1.4, (drop[0], drop[1], drop[2] + 0.12), None, FINGER_OPEN, "above drop zone", 0.0),
+        (1.0, drop, None, FINGER_OPEN, "down onto cloth", 0.0),
+        (0.6, drop, None, FINGER_OPEN, "settle", 0.0),
+        (0.6, drop, None, FINGER_CLOSED, "grasp cloth", 0.0),
+        (0.6, drop, None, FINGER_CLOSED, "hold", 0.0),
+        (1.0, (drop[0], drop[1], drop[2] + 0.18), None, FINGER_CLOSED, "lift cloth", 0.0),
+        (1.4, (0.36, 0.20, 1.00), left_face, FINGER_CLOSED, "turn toward glass", 0.0),
+    ]
+    for duration, pos, rot, label in _stain_rubs_left():
+        left_phase2.append((duration, tuple(float(v) for v in pos), rot, FINGER_CLOSED, label, 0.0))
+    left_phase2.append((1.0, tuple(float(v) for v in left_ready_pos), left_ready_rot, FINGER_OPEN, "left done", 0.0))
+
+    return {"left": _waypoints(left_phase1 + left_phase2), "right": _waypoints(right_all)}
