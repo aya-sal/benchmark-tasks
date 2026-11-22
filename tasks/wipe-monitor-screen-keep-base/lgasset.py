@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 from yam_arena.task_file import Box
 
-__all__ = ["Monitor", "fetch", "install", "on_reset", "on_step"]
+__all__ = ["Cloth", "Monitor", "fetch", "install", "on_reset", "on_step"]
 
 REPO = "LGElectronics/simready-assets"
 REVISION = "e965976d90f025237ad9ea8881f5f82755f26d9d"
@@ -38,6 +38,9 @@ _SMUDGES: list[tuple[int, str]] = []
 _SPAWN: dict = {}
 _STEP: list = []
 _RESET: list = []
+# Local-frame bounds of each rigid-body link, measured from the USD. ArenaWorld will not
+# build a box for an articulation, because the hinge and the panel move relative to the foot.
+_LINK_BOXES: dict[str, dict[str, tuple[tuple[float, float, float], tuple[float, float, float]]]] = {}
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,11 @@ class Monitor(Box):
         super()._check()
         if abs(math.fsum(v * v for v in self.quat_xyzw) - 1.0) > 1e-6:
             raise ValueError(f"{self.name}.quat_xyzw must be a unit quaternion")
+
+
+@dataclass(frozen=True)
+class Cloth(Box):
+    """A PhysX surface cloth. ``pos`` is the centre of the sheet; ``size`` is (width, depth, thickness)."""
 
 
 def _get(url: str) -> bytes:
@@ -145,6 +153,7 @@ def _prepare(prim, spec: Monitor) -> None:
             _axis_friction(body, "angular", TILT_HOLD_NM, TILT_HOLD_NM * 0.75)
     if monitor is None:
         raise RuntimeError(f"{spec.name}: the USD has no monitor rigid body")
+    _LINK_BOXES[spec.name] = _measure_links(prim)
     color = Gf.Vec3f(0.42, 0.30, 0.16)
     for i, local in enumerate(spec.marks):
         path = f"{monitor.GetPath()}/fingerprint_{i}"
@@ -195,16 +204,25 @@ def hide_marks(clean) -> None:
     """Hide a fingerprint once it has been wiped. Paths were recorded at spawn."""
     if not _SMUDGES or not any(clean):
         return
-    from pxr import UsdGeom
+    from pxr import Gf, UsdGeom
     import isaaclab.sim as sim_utils
 
     stage = sim_utils.get_current_stage()
     for index, path in _SMUDGES:
         prim = stage.GetPrimAtPath(path)
-        if prim and clean[index]:
-            UsdGeom.Imageable(prim).MakeInvisible()
-        elif prim:
-            UsdGeom.Imageable(prim).MakeVisible()
+        if not prim:
+            continue
+        imageable = UsdGeom.Imageable(prim)
+        xformable = UsdGeom.Xformable(prim)
+        scale = next((op for op in xformable.GetOrderedXformOps() if op.GetOpType() == UsdGeom.XformOp.TypeScale), None)
+        if clean[index]:
+            imageable.MakeInvisible()
+            if scale is not None:
+                scale.Set(Gf.Vec3f(0.0, 0.0, 0.0))
+        else:
+            imageable.MakeVisible()
+            if scale is not None:
+                scale.Set(Gf.Vec3f(0.0012, 0.024, 0.024))
 
 
 def seat_joints(environment) -> None:
@@ -237,34 +255,185 @@ def on_reset(fn):
     return fn
 
 
+def _measure_links(prim):
+    """Axis-aligned bounds of each rigid-body link, in that link's own frame."""
+    from pxr import Usd, UsdGeom, UsdPhysics
+
+    cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+    boxes = {}
+    for body in Usd.PrimRange(prim):
+        if not body.HasAPI(UsdPhysics.RigidBodyAPI):
+            continue
+        span = cache.ComputeLocalBound(body).ComputeAlignedRange()
+        if span.IsEmpty():
+            continue
+        boxes[body.GetName()] = (
+            tuple(float(v) for v in span.GetMin()),
+            tuple(float(v) for v in span.GetMax()),
+        )
+    if not boxes:
+        raise RuntimeError(f"{prim.GetPath()}: no rigid-body link has geometry")
+    return boxes
+
+
+def _rotate(xyzw, vector):
+    x, y, z, w = (float(v) for v in xyzw)
+    vx, vy, vz = (float(v) for v in vector)
+    return (
+        (1 - 2 * (y * y + z * z)) * vx + 2 * (x * y - w * z) * vy + 2 * (x * z + w * y) * vz,
+        2 * (x * y + w * z) * vx + (1 - 2 * (x * x + z * z)) * vy + 2 * (y * z - w * x) * vz,
+        2 * (x * z - w * y) * vx + 2 * (y * z + w * x) * vy + (1 - 2 * (x * x + y * y)) * vz,
+    )
+
+
+def _link_bounds(asset, boxes):
+    """World-frame bounds from each link's own box at its current pose."""
+    import numpy as np
+
+    poses = asset.data.body_link_pose_w.torch[0].detach().cpu().numpy().astype(np.float64)
+    low, high = np.full(3, np.inf), np.full(3, -np.inf)
+    found = False
+    for index, name in enumerate(asset.body_names):
+        box = boxes.get(name.rsplit("/", 1)[-1])
+        if box is None:
+            continue
+        (x0, y0, z0), (x1, y1, z1) = box
+        position, quat = poses[index, :3], poses[index, 3:7]
+        for corner in (
+            (x0, y0, z0), (x0, y0, z1), (x0, y1, z0), (x0, y1, z1),
+            (x1, y0, z0), (x1, y0, z1), (x1, y1, z0), (x1, y1, z1),
+        ):
+            world = position + np.asarray(_rotate(quat, corner))
+            low, high = np.minimum(low, world), np.maximum(high, world)
+        found = True
+    if not found:
+        raise RuntimeError(f"none of {list(asset.body_names)} match the measured links {sorted(boxes)}")
+    return low, high
+
+
+def _articulation_states(env, names):
+    """Object states for articulations, which ArenaWorld will not bound."""
+    import numpy as np
+
+    from yam_arena.task_file import ObjectState
+
+    base = env.unwrapped
+    world = base.arena_world
+    origin = base.scene.env_origins[0].detach().cpu().numpy().astype(np.float64)
+
+    def arr(value):
+        return value.detach().cpu().numpy().astype(np.float64)
+
+    out = {}
+    for name in names:
+        asset = base.scene.articulations[name]
+        pose = arr(world.get_pose_w(name)[0])
+        low, high = _link_bounds(asset, _LINK_BOXES[name])
+        low, high = low - origin, high - origin
+        out[name] = ObjectState(
+            pos=(low + high) / 2,
+            quat_xyzw=pose[3:],
+            lin_vel=arr(world.get_root_linear_velocity_w(name)[0]),
+            ang_vel=arr(world.get_root_angular_velocity_w(name)[0]),
+            low=low,
+            high=high,
+        )
+    return out
+
+
+def _cloth_object(spec: Cloth):
+    """A soft flat sheet. The left hand bunches it; a stiff spawn ridge only fell flat."""
+    import isaaclab.sim as sim_utils
+    from isaaclab_arena.assets.deformable_object import DeformableObject
+    from isaaclab_arena.utils.pose import Pose
+    from isaaclab_physx.sim.schemas import PhysxCollisionCfg, PhysxDeformableBodyPropertiesCfg
+    from isaaclab_physx.sim.spawners.materials import PhysxSurfaceDeformableBodyMaterialCfg
+    from yam_arena.station import linear_rgb
+
+    width, depth, thick = (float(v) for v in spec.size)
+    return DeformableObject(
+        name=spec.name,
+        spawner_cfg=sim_utils.MeshRectangleCfg(
+            size=(width, depth),
+            edge_refinement=8,
+            deformable_props=PhysxDeformableBodyPropertiesCfg(linear_damping=0.2),
+            collision_props=[PhysxCollisionCfg(rest_offset=0.002, contact_offset=0.008)],
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=linear_rgb(spec.color), roughness=0.85),
+            physics_material=PhysxSurfaceDeformableBodyMaterialCfg(
+                density=150.0,
+                surface_thickness=thick,
+                youngs_modulus=3.0e4,
+                poissons_ratio=0.25,
+                surface_bend_stiffness=80.0,
+                elasticity_damping=0.2,
+                bend_damping=0.1,
+                static_friction=1.2,
+                dynamic_friction=1.0,
+            ),
+        ),
+        initial_pose=Pose(position_xyz=tuple(float(v) for v in spec.pos), rotation_xyzw=(0.0, 0.0, 0.0, 1.0)),
+    )
+
+
+def _deformable_states(env, names):
+    """Object states for a surface cloth. ArenaWorld will not return a root pose for one."""
+    import numpy as np
+
+    from yam_arena.task_file import ObjectState
+
+    base = env.unwrapped
+    world = base.arena_world
+    origin = base.scene.env_origins[0].detach().cpu().numpy().astype(np.float64)
+
+    def arr(value):
+        return value.detach().cpu().numpy().astype(np.float64)
+
+    out = {}
+    for name in names:
+        nodes = arr(world.get_nodal_positions_w(name)[0])
+        centre = nodes.mean(axis=0)
+        box = world.get_aabb_w(name)
+        out[name] = ObjectState(
+            pos=centre - origin,
+            quat_xyzw=np.array([0.0, 0.0, 0.0, 1.0]),
+            lin_vel=arr(world.get_mean_linear_velocity_w(name)[0]),
+            ang_vel=np.zeros(3),
+            low=arr(box.min_point[0]) - origin,
+            high=arr(box.max_point[0]) - origin,
+        )
+    return out
+
+
 def _patch_scene(scene) -> None:
     if getattr(scene, "_lg_monitor", False):
         return
     task_object = scene.task_object
-    original_build = scene.build_task_environment
+    original_states = scene.object_states
+
+    def object_states(env, names):
+        live = env.unwrapped.scene
+        articulations = getattr(live, "articulations", {})
+        soft = getattr(live, "deformable_objects", {})
+        plain = [name for name in names if name not in articulations and name not in soft]
+        out = original_states(env, plain) if plain else {}
+        hinged = [name for name in names if name in articulations]
+        floppy = [name for name in names if name in soft]
+        if hinged:
+            out.update(_articulation_states(env, hinged))
+        if floppy:
+            out.update(_deformable_states(env, floppy))
+        return out
+
+    scene.object_states = object_states
 
     def task_object_hook(spec):
-        return _arena_object(spec) if isinstance(spec, Monitor) else task_object(spec)
-
-    def build(*args, **kwargs):
-        environment = original_build(*args, **kwargs)
-        task = kwargs.get("task")
-        if task is not None and any(isinstance(obj, Monitor) for obj in task.objects):
-            previous = environment.env_cfg_callback
-
-            def configure(cfg):
-                if previous is not None:
-                    cfg = previous(cfg)
-                for robot in (cfg.scene.left_robot, cfg.scene.right_robot):
-                    x, y, z = robot.init_state.pos
-                    robot.init_state.pos = (x, y, z + 0.35)
-                return cfg
-
-            environment.env_cfg_callback = configure
-        return environment
+        if isinstance(spec, Monitor):
+            return _arena_object(spec)
+        if isinstance(spec, Cloth):
+            return _cloth_object(spec)
+        return task_object(spec)
 
     scene.task_object = task_object_hook
-    scene.build_task_environment = build
     scene._lg_monitor = True
 
 

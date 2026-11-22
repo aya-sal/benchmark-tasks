@@ -1,7 +1,7 @@
-"""Scripted wipe. Vertical strokes, so the cloth does not shove the foot toward the open edge.
+"""Scripted wipe. Vertical strokes along the glass.
 
-The left arm does the wiping: the glass hangs past the desk's left side, and that side is
-in the left arm's reach. Run from this directory inside the Isaac Lab-Arena environment:
+The monitor stands 20 cm forward of the centre of the desk. The right arm picks up the cloth.
+Run from this directory inside the Isaac Lab-Arena environment:
 
     python demo.py task.py demo_out --max-steps 2400
     DEMO_VARIANT=idle python demo.py task.py idle_out --no-record
@@ -100,45 +100,50 @@ def script(task, ctx):
     from yam_arena.demo import grip_rotation
 
     variant = os.environ.get("DEMO_VARIANT", "")
-    arm = ctx.left
+    arm = ctx.right
     if variant == "idle":
         yield from wait(3)
         return
+    from yam_arena.constants import PAD_TIP_PAST_TCP
+
     down = grip_rotation(0.0)
-    cloth = np.array(scoring.CLOTH_POS)
-    yield from arm.move(cloth + (0, 0, 0.12), down, 2.0, grip=1.0)
-    yield from arm.move(cloth, down, 1.2)
-    yield from arm.set_grip(0.0, 0.7)
-    yield from arm.move(cloth + (0, 0, 0.16), down, 1.0)
-    glass_out = np.array([-1.0, 0.0, 0.0])  # glass faces the robot after the 180 degree yaw
-    face = wipe_rotation(down, glass_out)
+    x, y, _ = scoring.CLOTH_POS
+    z = scoring.TOP + PAD_TIP_PAST_TCP
+    edge_y = y + scoring.CLOTH_SIZE[1] / 2 + 0.02
+    left = ctx.left
+    yield from left.move((x, edge_y, z + 0.12), down, 1.6, grip=0.0)
+    yield from left.move((x, edge_y, z), down, 1.0)
+    yield from left.move((x, y, z), down, 2.2)
+    yield from left.move((x, y, z + 0.14), down, 0.8)
+    yield from left.move((x, edge_y + 0.04, z + 0.14), down, 0.8)
+    pinch = down
+    cloth = np.array([x, y - 0.03, z])
+    yield from arm.move(cloth + (0, 0, 0.12), pinch, 1.6, grip=1.0)
+    yield from arm.move(cloth, pinch, 1.2, grip=1.0)
+    yield from wait(0.8)
+    yield from arm.set_grip(0.0, 0.8)
+    yield from wait(0.6)
+    yield from arm.move(cloth + (0, 0, 0.18), pinch, 1.0)
+    face = task._wipe_rotation()
     if variant == "shove":
-        # Drive the outer bezel toward the open left edge. The foot has 30 mm of desk left.
+        # Drive the cloth into the outer bezel and sideways.
         outer = np.array(scoring.yaw180((-0.01, -0.28, 0.42), scoring.HEIGHT))
         yield from arm.move(outer + (-0.08, 0, 0), face, 2.0)
         yield from arm.move(outer + (0.0, 0.10, 0), face, 2.5)
         yield from wait(1.5)
         return
-    for local in scoring.MARKS:
-        mark = np.array(scoring.yaw180(local, scoring.HEIGHT))
-        front = mark + glass_out * 0.07
-        yield from arm.move(front + (0, 0, 0.03), face, 1.4)
-        yield from arm.move(mark + (0, 0, 0.02), face, 0.8)
-        yield from arm.move(mark + (0, 0, -0.035), face, 0.9)  # 5.5 cm along the glass, past the 2.5 cm wipe
-        yield from arm.move(front + (0, 0, -0.02), face, 0.6)
-    # Back away so both grippers are clear, then hold still for the 2 s window.
-    yield from arm.set_grip(1.0, 0.5)
-    yield from arm.move(cloth + (0, 0, 0.20), down, 1.5)
-    yield from wait(2.5)
+    yield from arm.move((0.36, -0.10, 1.00), face, 1.6)
+    for duration, pos, rot, _label in task._stain_rubs():
+        yield from arm.move(pos, rot, duration)
+    yield from wait(1.5)
 
 
 class Ctx:
     def __init__(self):
         from yam_arena import station
 
-        lift = np.array([0.0, 0.0, 0.35])
-        self.left = Arm("left", np.asarray(station.BASES["left"], float) + lift)
-        self.right = Arm("right", np.asarray(station.BASES["right"], float) + lift)
+        self.left = Arm("left", np.asarray(station.BASES["left"], float))
+        self.right = Arm("right", np.asarray(station.BASES["right"], float))
 
     def action(self):
         from inspect_robots.types import Action
@@ -156,7 +161,7 @@ def _write_mp4(frames, path: Path) -> None:
     )
 
 
-def run(task_path, out_dir, max_steps=2400, record=True, cam_width=320, cam_height=176):
+def run(task_path, out_dir, max_steps=2400, record=True, cam_width=320, cam_height=176, window=False):
     from types import SimpleNamespace
 
     from inspect_robots import Scene
@@ -170,6 +175,7 @@ def run(task_path, out_dir, max_steps=2400, record=True, cam_width=320, cam_heig
     emb = yam_arena_embodiment(
         task=task_path, object_jitter=0, control_hz=CONTROL_HZ, cam_width=cam_width,
         cam_height=cam_height, device=os.environ.get("DEMO_DEVICE", "cpu"),
+        headless=not window,
     )
     obs = emb.reset(Scene(id="demo", instruction="demo"))
     ctx = Ctx()
@@ -216,5 +222,6 @@ if __name__ == "__main__":
     ap.add_argument("out")
     ap.add_argument("--max-steps", type=int, default=2400)
     ap.add_argument("--no-record", action="store_true")
+    ap.add_argument("--window", action="store_true", help="open the Isaac Sim window on the browser desktop")
     args = ap.parse_args()
-    run(args.task, args.out, args.max_steps, record=not args.no_record)
+    run(args.task, args.out, args.max_steps, record=not args.no_record, window=args.window)

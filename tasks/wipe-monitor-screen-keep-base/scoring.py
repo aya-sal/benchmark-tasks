@@ -11,7 +11,7 @@ import math
 TOP = 0.7475
 DESK_X = (-0.19, 0.91)   # station table, 1.10 m deep, centred at x = 0.36
 DESK_Y = (-0.65, 0.65)   # 1.30 m wide, centred at y = 0
-ORIGIN = (0.433, 0.470, TOP + 0.001)  # asset origin: bottom centre of the foot
+ORIGIN = (0.56, 0.0, TOP + 0.001)  # bottom centre of the foot, 20 cm forward of the desk centre
 YAW = math.pi
 HEIGHT = -0.110          # height slide at its low stop (authored travel 0.11288 m)
 # Glass is the flat face at local x = 0.0531, normal +x, y ±0.2956, z 0.2364..0.5732.
@@ -20,16 +20,18 @@ FOOT = tuple((x, y, 0.001) for x in (-0.120, 0.120) for y in (-0.150, 0.150))
 # Link-frame boxes the hands must leave. Base includes the column; panel is the head.
 BASE_BOX = ((-0.125, -0.155, 0.0), (0.125, 0.155, 0.447))
 PANEL_BOX = ((-0.017, -0.303, 0.219), (0.054, 0.303, 0.581))
-CLOTH_SIZE = (0.11, 0.11, 0.018)  # folded microfiber pad, thin axis local z
-CLOTH_POS = (0.26, 0.08, TOP + 0.009)
+CLOTH_SIZE = (0.20, 0.20, 0.010)  # soft 200 mm sheet, 10 mm thick, lying on the desk
+CLOTH_POS = (0.14, 0.0, TOP + 0.006)  # mid-surface, so the underside rests on the desk
 SLIDE_M = 0.025
+PRESS_N = 1.5            # kept for the spring estimate; cleaning uses contact on the glass
+STAIN_DIAMETER = 0.08    # metres. The arm and the cloth must meet inside this circle
 HOLD_STEPS = 40
 CLEAR_M = 0.06
 HOLD_OPENING = 0.045     # finger-gap sum, metres; full open is 0.094
 HOLD_REACH = 0.07
-GAP = 0.008              # cloth face may sit this far off a mark along its thickness
+GAP = 0.025              # how far a point may sit off the glass and still count as contact
 ALIGN = math.cos(math.radians(25))
-TILT_COS = math.cos(math.radians(8))
+MONITOR_TILT_MAX = math.cos(math.radians(45))  # monitor "fallen" if tilted past 45°
 DRIFT_M = 0.003
 DRIFT_DEG = 1.0
 
@@ -128,47 +130,63 @@ def hands_clear(tips, base_pos, base_R, panel_pos, panel_R) -> bool:
     return True
 
 
+def on_glass(point, mark, panel_R) -> bool:
+    """True when ``point`` is on the glass, inside the circle centred on ``mark``.
+
+    ``along`` is the distance off the glass, positive out toward the robot. Only a contact
+    gap counts. A point in the air, or the cloth lying on the desk, does not.
+    """
+    normal = _col(panel_R, 0)
+    delta = _sub(point, mark)
+    along = _dot(delta, normal)
+    lateral = _sub(delta, (along * normal[0], along * normal[1], along * normal[2]))
+    return _norm(lateral) <= STAIN_DIAMETER / 2 and abs(along) <= GAP
+
+
+def _reach(state, obs) -> None:
+    """Mark a stain clean when the gripper and the cloth are both on the glass inside its circle."""
+    fingers = obs.get("fingers") or ()
+    cloth = obs.get("cloth_pts") or ()
+    origin, rotation = obs["panel_pos"], obs["panel_R"]
+    for index, local in enumerate(MARKS):
+        if state["clean"][index]:
+            continue
+        mark = _add(origin, _mul(rotation, local))
+        arm = any(on_glass(point, mark, rotation) for point in fingers)
+        sheet = any(on_glass(point, mark, rotation) for point in cloth)
+        if arm and sheet:
+            state["clean"][index] = True
+
+
+def monitor_upright(panel_R) -> bool:
+    """The monitor head has not fallen over. Its local +Z should still point mostly world +Z."""
+    up = _col(panel_R, 2)
+    return _dot(up, (0.0, 0.0, 1.0)) >= MONITOR_TILT_MAX
+
+
 def step(state, obs) -> None:
-    """One control step. ``obs`` keys: base_pos, base_R, panel_pos, panel_R, cloth_pos, cloth_R, tips, held."""
-    if state["failed"] or not foot_ok(obs["base_pos"], obs["base_R"]):
+    """One control step.
+
+    Scoring:
+      1.0 — all 8 stains cleaned and the monitor is still upright.
+      0.5 — 4 or more stains cleaned, monitor upright.
+      0.0 — fewer than 4 cleaned, or the monitor has fallen.
+    """
+    upright = monitor_upright(obs["panel_R"])
+    if not upright:
         state["failed"] = True
-        state["window"].clear()
+    _reach(state, obs)
+    state["prev"] = obs["cloth_pos"]
+    n_clean = sum(state["clean"])
+    if state["failed"]:
         state["score"] = 0.0
         state["success"] = False
-        state["prev"] = obs["cloth_pos"]
-        return
-    normal = _col(obs["panel_R"], 0)  # glass faces local +x
-    moved = (0.0, 0.0, 0.0) if state["prev"] is None else _sub(obs["cloth_pos"], state["prev"])
-    state["prev"] = obs["cloth_pos"]
-    along = _norm(_sub(moved, tuple(_dot(moved, normal) * n for n in normal)))
-    for i, local in enumerate(MARKS):
-        if state["clean"][i]:
-            continue
-        mark = _add(obs["panel_pos"], _mul(obs["panel_R"], local))
-        if obs["held"] and covering(mark, obs["cloth_pos"], obs["cloth_R"], normal):
-            state["slide"][i] += along
-            if state["slide"][i] >= SLIDE_M:
-                state["clean"][i] = True
-    n_clean = sum(state["clean"])
-    clear = hands_clear(obs["tips"], obs["base_pos"], obs["base_R"], obs["panel_pos"], obs["panel_R"])
-    up = _col(obs["base_R"], 2)
-    window = state["window"]
-    window.append((obs["base_pos"], up) if n_clean == len(MARKS) and clear else None)
-    del window[:-HOLD_STEPS]
-    held_still = False
-    if len(window) == HOLD_STEPS and all(sample is not None for sample in window):
-        p0, u0 = window[0]
-        held_still = all(
-            _norm(_sub(p, p0)) < DRIFT_M and math.degrees(math.acos(max(-1.0, min(1.0, _dot(u, u0))))) < DRIFT_DEG
-            for p, u in window
-        )
-    if n_clean == len(MARKS) and clear and held_still:
-        value, done = 1.0, True
     elif n_clean == len(MARKS):
-        value, done = 0.5, False
+        state["score"] = 1.0
+        state["success"] = True
     elif n_clean >= 4:
-        value, done = 0.25, False
+        state["score"] = 0.5
+        state["success"] = False
     else:
-        value, done = 0.0, False
-    state["score"] = value
-    state["success"] = done
+        state["score"] = 0.0
+        state["success"] = False

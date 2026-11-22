@@ -1,6 +1,6 @@
 # Wipe fingerprints off a desktop monitor without sliding it off the desk
 
-Eight oily marks sit on the glass of an LG UltraGear 27GX790A. The glass is wider than the foot and hangs past the desk's left edge; the foot's left corners are 30 mm from that edge. A stroke toward the overhang walks the foot off the desk, and the trial then scores 0 even if the glass was already clean. The scripted policy wipes each mark vertically and lets go.
+Eight oily marks sit on the glass of an LG UltraGear 27GX790A. The monitor stands 20 cm forward of the centre of the desk, and the cloth is a soft sheet. Walking the foot off the desk scores 0 even if the glass was already clean. The scripted policy wipes each mark vertically and lets go.
 
 The demo and the Dream-1 run have not been executed here. `test_score.py` checks the layout and the score table without Isaac Sim.
 
@@ -15,9 +15,9 @@ The mesh is LG's SimReady articulation `monitor_27gx790a`, revision `e965976d90f
 - Height slide along z, limits −0.11288 to 0 m. Tilt about local y, limits −15° to +5° (the same 20° range as the manual; the file's sign runs the other way, with +5° toward the glass).
 - Authored static friction 0.4. The file ships with gravity off on the head and the hinge, and with no tilt stiffness.
 
-Spawn turns gravity on, sets restitution to 0.05, holds the height slide on its lower stop (40 N of slide friction, a 200 N/m drive at −0.110 m) and holds the tilt at 0 with 8 N·m of friction. That friction is an estimate so the head does not sag under its own weight. The asset is yawed 180° so the glass faces the robot. The asset origin, the bottom of the foot, is (0.433, 0.470, 0.7485) m.
+Spawn turns gravity on, sets restitution to 0.05, holds the height slide on its lower stop (40 N of slide friction, a 200 N/m drive at −0.110 m) and holds the tilt at 0 with 8 N·m of friction. That friction is an estimate so the head does not sag under its own weight. The asset is yawed 180° so the glass faces the robot. The asset origin, the bottom of the foot, is (0.56, 0, 0.7485) m, 20 cm forward of the desk centre. The arms stay on the station bases.
 
-Two 200 × 200 × 350 mm pedestals raise the arm bases by 350 mm so the grippers can reach the glass. They are part of the physical setup.
+The cloth is a soft PhysX surface, 200 × 200 mm and 10 mm thick, about 60 g, lying on the desk at (0.14, 0, 0.7535). The left hand pushes its left edge toward the right so the sheet bunches, and the right hand pinches that pile.
 
 ## Run
 
@@ -34,7 +34,7 @@ inspect-robots run --embodiment yam_arena --policy dream \
   --scorer task_score --max-steps 2400 --seed 1 --store-frames --log-dir model_out
 ```
 
-`DEMO_VARIANT=shove` drives the cloth into the outer bezel and 10 cm toward the open edge.
+`DEMO_VARIANT=shove` drives the cloth into the outer bezel and 10 cm sideways.
 
 ## Score
 
@@ -43,7 +43,7 @@ inspect-robots run --embodiment yam_arena --policy dream \
 - **0.25** — 4 to 7 wiped, foot still on the desk.
 - **0** — fewer than 4 wiped, or the foot left the desk at any time.
 
-A wipe counts only while a gripper holds the cloth (opening under 45 mm, gripper centre within 70 mm of the cloth) with the broad face on the mark, within 25° of the glass normal, inside the 110 mm face with 4 mm of slack, and within 8 mm of the mark. The cloth then slides at least 25 mm across the glass. The foot is off the desk when any underside corner leaves x −0.19 to 0.91 or y −0.65 to 0.65, drops more than 8 mm below the top, rises more than 12 mm, or the foot tips more than 8°. That failure does not clear.
+A stain disappears when the gripper and the cloth are both on the glass, inside the circle of diameter 1 m centred on that stain. A point in the air does not count. The square is then hidden. The foot is off the desk when any underside corner leaves x −0.19 to 0.91 or y −0.65 to 0.65, drops more than 8 mm below the top, rises more than 12 mm, or the foot tips more than 8°. That failure does not clear.
 
 ## Third-party assets
 
